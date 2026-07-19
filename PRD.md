@@ -228,6 +228,46 @@ Bottom navigation:
 
 On iOS, unavailable destinations are replaced by capability-aware aggregate views rather than disabled Android-shaped screens.
 
+### Screen inventory
+
+#### Onboarding
+
+1. **Welcome** — product value, supported capabilities, and start action.
+2. **Privacy Explanation** — local-first processing, data collected, and data never inspected.
+3. **Permission Setup** — progressive permission requests with benefits and consequences.
+4. **Monitoring Setup** — collection cadence, persistent notification, and battery guidance.
+5. **Data Plan Setup** — optional cap, unit, and billing-cycle start date.
+6. **Capability Diagnostics** — status and recovery action for each platform capability.
+
+#### Main experience
+
+7. **Overview Dashboard** — live speed, today’s usage, network split, plan progress, trend, top apps, and alerts.
+8. **Live Speed Monitor** — upload/download speed, connection type, monitoring state, and Android overlay control.
+9. **Apps Usage List** — ranked apps with search, time range, network filter, and foreground/background status.
+10. **App Usage Detail** — app totals, upload/download split, historical chart, baseline, and related alerts.
+11. **Usage History** — day, week, month, and billing-cycle charts with network and direction filters.
+12. **Usage Period Detail** — breakdown for a selected day, week, month, or billing cycle.
+13. **Alerts List** — anomaly, new-app, background-usage, and data-plan alerts with read state.
+14. **Alert Detail** — actual usage, baseline comparison, network, time window, context, and suggested actions.
+
+#### Settings
+
+15. **Data Plan & Billing Cycle** — cap, unit, cycle day, progress, and threshold configuration.
+16. **Monitoring & Background Logging** — collection status, cadence, persistent notification, and battery settings.
+17. **Alert Preferences** — sensitivity and per-category notification controls.
+18. **Widget Settings** — widget content, refresh preference, preview, and setup guidance.
+19. **Units & Appearance** — MB/GB preference and system/light/dark theme.
+20. **Permissions & Diagnostics** — capability status, last sample, data quality, and OS settings shortcuts.
+21. **Data Management** — retention, export when available, and delete-all-data controls.
+22. **Privacy & About** — privacy explanation, platform limitations, app version, and legal links.
+
+#### Platform-specific screens and flows
+
+23. **Android Floating Overlay Setup** — permission explanation, preview, enable/disable, and positioning guidance.
+24. **Android Persistent Notification Setup** — notification permission, content preview, and monitoring control.
+25. **Widget Configuration** — widget size/content selection and deep-link destination where supported.
+26. **iOS VPN Profile Setup / Limitations** — entitlement-dependent setup, system consent, measured scope, and unsupported capabilities.
+
 ### Key empty/error states
 
 - Monitoring not configured.
