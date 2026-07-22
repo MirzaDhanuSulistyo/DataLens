@@ -1,0 +1,180 @@
+import 'dart:async';
+
+import 'package:datalens/core/platform/usage_gateway.dart';
+import 'package:datalens/features/plans/domain/billing_cycle.dart';
+import 'package:flutter/foundation.dart';
+
+class UsageController extends ChangeNotifier {
+  UsageController(this.gateway);
+
+  final UsageGateway gateway;
+  CapabilityStatus capabilities = const CapabilityStatus.unsupported();
+  UsageTotal today = const UsageTotal();
+  UsageTotal cycleUsage = const UsageTotal();
+  List<AppUsageRecord> apps = const [];
+  List<DailyUsageRecord> dailyUsage = const [];
+  List<AlertRecord> alerts = const [];
+  DataPlan? plan;
+  String network = 'all';
+  bool loading = true;
+  String? error;
+  double? downloadBitsPerSecond;
+  double? uploadBitsPerSecond;
+  String liveNetwork = 'unknown';
+
+  Timer? _liveTimer;
+  LiveCounters? _previousCounters;
+  bool _liveRequestPending = false;
+  final List<double> _downWindow = [];
+  final List<double> _upWindow = [];
+
+  Future<void> initialize() async {
+    capabilities = await gateway.status();
+    await refreshData();
+    if (capabilities.monitoring) _startLiveUpdates();
+  }
+
+  Future<void> refreshData() async {
+    loading = true;
+    error = null;
+    notifyListeners();
+    try {
+      capabilities = await gateway.status();
+      plan = await gateway.getPlan();
+      final now = DateTime.now();
+      final startToday = DateTime(now.year, now.month, now.day);
+      final cycle = billingCycleFor(now, plan?.cycleDay ?? 1);
+      final values = await Future.wait<Object>([
+        gateway.summary(startToday, now, network: network),
+        gateway.summary(cycle.start, now, network: 'mobile'),
+        gateway.apps(startToday, now, network: network),
+        gateway.daily(
+          startToday.subtract(const Duration(days: 6)),
+          now,
+          network: network,
+        ),
+        gateway.alerts(),
+      ]);
+      today = values[0] as UsageTotal;
+      cycleUsage = values[1] as UsageTotal;
+      apps = values[2] as List<AppUsageRecord>;
+      dailyUsage = values[3] as List<DailyUsageRecord>;
+      alerts = values[4] as List<AlertRecord>;
+    } catch (_) {
+      error = 'Usage data could not be loaded. Try again.';
+    } finally {
+      loading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> setNetwork(String value) async {
+    network = switch (value) {
+      'Mobile' => 'mobile',
+      'Wi-Fi' => 'wifi',
+      _ => 'all',
+    };
+    await refreshData();
+  }
+
+  Future<void> openUsageSettings() async {
+    await gateway.openUsageAccessSettings();
+  }
+
+  Future<void> startMonitoring() async {
+    await gateway.requestNotificationPermission();
+    await gateway.startMonitoring();
+    await gateway.sampleNow();
+    capabilities = await gateway.status();
+    _startLiveUpdates();
+    await refreshData();
+  }
+
+  Future<void> stopMonitoring() async {
+    await gateway.stopMonitoring();
+    _liveTimer?.cancel();
+    _previousCounters = null;
+    downloadBitsPerSecond = null;
+    uploadBitsPerSecond = null;
+    capabilities = await gateway.status();
+    notifyListeners();
+  }
+
+  Future<void> reconcile() async {
+    loading = true;
+    notifyListeners();
+    await gateway.reconcileNow();
+    await refreshData();
+  }
+
+  Future<void> updatePlan(DataPlan value) async {
+    await gateway.savePlan(value);
+    plan = value;
+    await refreshData();
+  }
+
+  Future<void> deleteAllData() async {
+    await gateway.stopMonitoring();
+    await gateway.deleteAllData();
+    _liveTimer?.cancel();
+    _previousCounters = null;
+    capabilities = await gateway.status();
+    await refreshData();
+  }
+
+  void _startLiveUpdates() {
+    _liveTimer?.cancel();
+    _readLiveCounters();
+    _liveTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _readLiveCounters(),
+    );
+  }
+
+  Future<void> _readLiveCounters() async {
+    if (_liveRequestPending) return;
+    _liveRequestPending = true;
+    try {
+      final current = await gateway.liveCounters();
+      final previous = _previousCounters;
+      _previousCounters = current;
+      if (current == null) return;
+      liveNetwork = current.networkType;
+      if (previous == null ||
+          current.monotonicMillis <= previous.monotonicMillis) {
+        notifyListeners();
+        return;
+      }
+      final elapsed =
+          (current.monotonicMillis - previous.monotonicMillis) / 1000;
+      final rx = current.rxBytes - previous.rxBytes;
+      final tx = current.txBytes - previous.txBytes;
+      if (rx < 0 || tx < 0) {
+        downloadBitsPerSecond = null;
+        uploadBitsPerSecond = null;
+      } else {
+        _push(_downWindow, rx * 8 / elapsed);
+        _push(_upWindow, tx * 8 / elapsed);
+        downloadBitsPerSecond = _average(_downWindow);
+        uploadBitsPerSecond = _average(_upWindow);
+      }
+      notifyListeners();
+    } finally {
+      _liveRequestPending = false;
+    }
+  }
+
+  void _push(List<double> values, double value) {
+    values.add(value);
+    if (values.length > 4) values.removeAt(0);
+  }
+
+  double _average(List<double> values) =>
+      values.reduce((a, b) => a + b) / values.length;
+
+  @override
+  void dispose() {
+    _liveTimer?.cancel();
+    super.dispose();
+  }
+}
