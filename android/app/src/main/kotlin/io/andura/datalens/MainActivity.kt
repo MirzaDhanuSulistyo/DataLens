@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import io.andura.datalens.tracking.HotspotStateMonitor
 import io.andura.datalens.tracking.MonitoringService
 import io.andura.datalens.tracking.UsageCollector
 import io.andura.datalens.tracking.UsageDatabase
@@ -16,6 +17,7 @@ import java.util.concurrent.Executors
 class MainActivity : FlutterActivity() {
     private lateinit var database: UsageDatabase
     private lateinit var collector: UsageCollector
+    private lateinit var hotspotStateMonitor: HotspotStateMonitor
     private val executor = Executors.newSingleThreadExecutor()
     private var notificationResult: MethodChannel.Result? = null
 
@@ -23,6 +25,7 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         database = UsageDatabase(applicationContext)
         collector = UsageCollector(applicationContext)
+        hotspotStateMonitor = HotspotStateMonitor(applicationContext).also { it.start() }
         // An app update stops running services. Restore monitoring when the user
         // previously enabled it and opens the updated app.
         if (database.setting("monitoring_enabled") == "true") {
@@ -59,6 +62,11 @@ class MainActivity : FlutterActivity() {
                     val end = call.argument<Number>("end")!!.toLong()
                     result.success(database.dailyUsage(start, end, call.argument("network")))
                 }
+                "getHotspotUsage" -> {
+                    val start = call.argument<Number>("start")!!.toLong()
+                    val end = call.argument<Number>("end")!!.toLong()
+                    runAsync(result) { collector.hotspotUsage(start, end, call.argument("network")) }
+                }
                 "savePlan" -> {
                     database.savePlan(
                         call.argument<Number>("capBytes")!!.toLong(),
@@ -82,6 +90,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        if (::hotspotStateMonitor.isInitialized) hotspotStateMonitor.stop()
         executor.shutdown()
         super.onDestroy()
     }

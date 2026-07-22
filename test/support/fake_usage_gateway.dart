@@ -12,6 +12,16 @@ class FakeUsageGateway implements UsageGateway {
     cycleDay: 1,
   );
   UsageTotal total = const UsageTotal(rxBytes: 900000000, txBytes: 380000000);
+  HotspotUsage hotspot = HotspotUsage(
+    state: 'active',
+    stateQuality: 'system_callback',
+    usageAvailable: true,
+    today: const UsageTotal(rxBytes: 180000000, txBytes: 60000000),
+    month: const UsageTotal(rxBytes: 900000000, txBytes: 200000000),
+    session: const UsageTotal(rxBytes: 80000000, txBytes: 20000000),
+    sessionStartedAt: DateTime.now().subtract(const Duration(minutes: 42)),
+    lastUpdatedAt: DateTime.now(),
+  );
   List<AppUsageRecord> appRecords = const [
     AppUsageRecord(
       id: 1,
@@ -32,7 +42,7 @@ class FakeUsageGateway implements UsageGateway {
     DateTime start,
     DateTime end, {
     String network = 'all',
-  }) async => appRecords;
+  }) async => network == 'hotspot' ? const [] : appRecords;
 
   @override
   Future<List<DailyUsageRecord>> daily(
@@ -51,6 +61,13 @@ class FakeUsageGateway implements UsageGateway {
 
   @override
   Future<DataPlan?> getPlan() async => plan;
+
+  @override
+  Future<HotspotUsage> hotspotUsage(
+    DateTime start,
+    DateTime end, {
+    String network = 'all',
+  }) async => hotspot;
 
   @override
   Future<LiveCounters?> liveCounters() async => null;
@@ -98,5 +115,5 @@ class FakeUsageGateway implements UsageGateway {
     DateTime start,
     DateTime end, {
     String network = 'all',
-  }) async => total;
+  }) async => network == 'hotspot' ? hotspot.today : total;
 }

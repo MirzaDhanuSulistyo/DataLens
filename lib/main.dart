@@ -172,6 +172,12 @@ class _OverviewScreenState extends State<OverviewScreen> {
       _LiveSpeedCard(controller: widget.controller),
       SizedBox(height: tokens.space4),
       _UsageSummary(controller: widget.controller),
+      SizedBox(height: tokens.space4),
+      _HotspotCard(controller: widget.controller),
+      if (widget.controller.network == 'all') ...[
+        SizedBox(height: tokens.space4),
+        _TrafficCategoriesCard(controller: widget.controller),
+      ],
       SizedBox(height: tokens.space6),
       const AnduraSectionHeader(title: 'Data plan', action: 'Manage'),
       SizedBox(height: tokens.space3),
@@ -183,7 +189,10 @@ class _OverviewScreenState extends State<OverviewScreen> {
       SizedBox(height: tokens.space6),
       const AnduraSectionHeader(title: 'Top apps today', action: 'See all'),
       SizedBox(height: tokens.space3),
-      _TopAppsCard(records: widget.controller.apps),
+      _TopAppsCard(
+        records: widget.controller.apps,
+        hotspotSelected: widget.controller.network == 'hotspot',
+      ),
       if (widget.controller.error != null) ...[
         SizedBox(height: tokens.space4),
         AnduraAlert(
@@ -281,7 +290,7 @@ class _NetworkFilters extends StatelessWidget {
       scrollDirection: Axis.horizontal,
       child: Row(
         children: [
-          for (final value in const ['All', 'Mobile', 'Wi-Fi']) ...[
+          for (final value in const ['All', 'Mobile', 'Wi-Fi', 'Hotspot']) ...[
             AnduraChip(
               label: value,
               selected: value == selected,
@@ -289,10 +298,12 @@ class _NetworkFilters extends StatelessWidget {
                   ? const Icon(Icons.signal_cellular_alt, size: 16)
                   : value == 'Wi-Fi'
                   ? const Icon(Icons.wifi, size: 16)
+                  : value == 'Hotspot'
+                  ? const Icon(Icons.wifi_tethering, size: 16)
                   : null,
               onSelected: (_) => onSelected(value),
             ),
-            if (value != 'Wi-Fi') const SizedBox(width: AnduraSpacing.sm),
+            if (value != 'Hotspot') const SizedBox(width: AnduraSpacing.sm),
           ],
         ],
       ),
@@ -500,6 +511,172 @@ class _UsageSummary extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _HotspotCard extends StatelessWidget {
+  const _HotspotCard({required this.controller});
+  final UsageController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = AnduraThemeTokens.of(context);
+    final hotspot = controller.hotspot;
+    final statusLabel = hotspot.active
+        ? 'Active'
+        : hotspot.stateAvailable
+        ? 'Off'
+        : 'State unavailable';
+    final duration = hotspot.sessionStartedAt == null
+        ? null
+        : DateTime.now().difference(hotspot.sessionStartedAt!);
+    return AnduraCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              _AppIcon(icon: Icons.wifi_tethering, color: tokens.accent),
+              SizedBox(width: tokens.space3),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Hotspot & tethering',
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    SizedBox(height: tokens.space1),
+                    Text(
+                      hotspot.usageAvailable
+                          ? '${formatBytes(hotspot.today.totalBytes)} today'
+                          : 'Grant usage access to measure tethering',
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: tokens.muted),
+                    ),
+                  ],
+                ),
+              ),
+              AnduraBadge(label: statusLabel),
+            ],
+          ),
+          SizedBox(height: tokens.space4),
+          Row(
+            children: [
+              Expanded(
+                child: AnduraStat(
+                  label: 'TODAY',
+                  value: hotspot.usageAvailable
+                      ? formatBytes(hotspot.today.totalBytes)
+                      : '—',
+                  change: hotspot.usageAvailable
+                      ? '${formatBytes(hotspot.today.rxBytes)} down · ${formatBytes(hotspot.today.txBytes)} up'
+                      : 'Usage unavailable',
+                ),
+              ),
+              Expanded(
+                child: AnduraStat(
+                  label: 'CURRENT SESSION',
+                  value: hotspot.active && hotspot.usageAvailable
+                      ? formatBytes(hotspot.session.totalBytes)
+                      : '—',
+                  change: hotspot.active && duration != null
+                      ? _durationLabel(duration)
+                      : hotspot.stateAvailable
+                      ? 'Hotspot is off'
+                      : 'Status requires Android 11+',
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: tokens.space3),
+          AnduraListItem(
+            leading: Icon(Icons.calendar_month_outlined, color: tokens.accent),
+            title: const Text('This month'),
+            subtitle: Text(
+              '${formatBytes(hotspot.month.rxBytes)} down · ${formatBytes(hotspot.month.txBytes)} up',
+            ),
+            trailing: Text(
+              hotspot.usageAvailable
+                  ? formatBytes(hotspot.month.totalBytes)
+                  : '—',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+          SizedBox(height: tokens.space2),
+          Text(
+            'Select the Hotspot filter for daily history. Aggregate forwarded traffic only; apps on connected devices cannot be identified.',
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: tokens.muted),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _durationLabel(Duration value) {
+  if (value.inHours > 0) {
+    return '${value.inHours}h ${value.inMinutes.remainder(60)}m active';
+  }
+  return '${value.inMinutes.clamp(0, 59)}m active';
+}
+
+class _TrafficCategoriesCard extends StatelessWidget {
+  const _TrafficCategoriesCard({required this.controller});
+  final UsageController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = AnduraThemeTokens.of(context);
+    final apps = controller.apps.fold<int>(
+      0,
+      (total, app) => total + app.totalBytes,
+    );
+    final tethering = controller.hotspot.today.totalBytes;
+    final remainder = controller.today.totalBytes - apps - tethering;
+    final system = remainder > 0 ? remainder : 0;
+    final rows = [
+      (Icons.apps_rounded, 'Phone apps', apps),
+      (Icons.wifi_tethering, 'Hotspot & tethering', tethering),
+      (Icons.memory_rounded, 'System or unattributed', system),
+    ];
+    return AnduraCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Today by category',
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          SizedBox(height: tokens.space2),
+          Text(
+            'App and tethering counters are reconciled by Android and may update later.',
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: tokens.muted),
+          ),
+          SizedBox(height: tokens.space3),
+          for (var index = 0; index < rows.length; index++) ...[
+            AnduraListItem(
+              leading: Icon(rows[index].$1, color: tokens.accent),
+              title: Text(rows[index].$2),
+              trailing: Text(
+                formatBytes(rows[index].$3),
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+            if (index != rows.length - 1) const AnduraDivider(),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -766,17 +943,20 @@ class _ChartBar extends StatelessWidget {
 }
 
 class _TopAppsCard extends StatelessWidget {
-  const _TopAppsCard({required this.records});
+  const _TopAppsCard({required this.records, required this.hotspotSelected});
   final List<AppUsageRecord> records;
+  final bool hotspotSelected;
 
   @override
   Widget build(BuildContext context) {
     final tokens = AnduraThemeTokens.of(context);
     final visible = records.take(3).toList();
     if (visible.isEmpty) {
-      return const AnduraCard(
+      return AnduraCard(
         child: AnduraEmptyState(
-          message: 'Grant usage access, then reconcile to see per-app usage.',
+          message: hotspotSelected
+              ? 'Android cannot identify apps used on connected devices.'
+              : 'Grant usage access, then reconcile to see per-app usage.',
           icon: Icons.apps_outlined,
         ),
       );
@@ -1174,6 +1354,15 @@ class _SettingsScreen extends StatelessWidget {
                 label: 'Latest sample',
                 available: capability.latestSampleAt != null,
                 detail: _sampleLabel(capability.latestSampleAt),
+              ),
+              _CapabilityRow(
+                label: 'Hotspot state',
+                available: controller.hotspot.stateAvailable,
+                detail: controller.hotspot.active
+                    ? 'Active'
+                    : controller.hotspot.stateAvailable
+                    ? 'Off'
+                    : 'Unavailable on this device',
               ),
             ],
           ),

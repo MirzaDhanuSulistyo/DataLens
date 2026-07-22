@@ -74,8 +74,9 @@ class UsageCollector(private val context: Context) {
             while (stats.hasNextBucket()) {
                 stats.getNextBucket(bucket)
                 val uid = bucket.uid
-                if (uid <= 0 || bucket.rxBytes + bucket.txBytes <= 0) continue
-                val state = when (bucket.state) {
+                val tethering = uid == NetworkStats.Bucket.UID_TETHERING
+                if ((!tethering && uid <= 0) || bucket.rxBytes + bucket.txBytes <= 0) continue
+                val state = if (tethering) "unknown" else when (bucket.state) {
                     NetworkStats.Bucket.STATE_FOREGROUND -> "foreground"
                     NetworkStats.Bucket.STATE_DEFAULT -> "background"
                     else -> "unknown"
@@ -90,15 +91,20 @@ class UsageCollector(private val context: Context) {
             database.clearAppDeltas(start, end, network)
             totals.forEach { (key, bytes) ->
                 val (uid, state) = key
-                val packageName = context.packageManager.getPackagesForUid(uid)?.firstOrNull()
-                val label = packageName?.let {
-                    runCatching {
-                        val info = context.packageManager.getApplicationInfo(it, 0)
-                        context.packageManager.getApplicationLabel(info).toString()
-                    }.getOrNull()
-                } ?: "UID $uid"
-                val appId = database.upsertApp(uid, packageName, label, end)
-                database.insertAppDelta(start, end, appId, uid, network, state, bytes.rx, bytes.tx)
+                if (uid == NetworkStats.Bucket.UID_TETHERING) {
+                    val appId = database.upsertTethering(end)
+                    database.insertAppDelta(start, end, appId, uid, network, "unknown", bytes.rx, bytes.tx)
+                } else {
+                    val packageName = context.packageManager.getPackagesForUid(uid)?.firstOrNull()
+                    val label = packageName?.let {
+                        runCatching {
+                            val info = context.packageManager.getApplicationInfo(it, 0)
+                            context.packageManager.getApplicationLabel(info).toString()
+                        }.getOrNull()
+                    } ?: "UID $uid"
+                    val appId = database.upsertApp(uid, packageName, label, end)
+                    database.insertAppDelta(start, end, appId, uid, network, state, bytes.rx, bytes.tx)
+                }
             }
             totals.size
         } catch (_: SecurityException) {
@@ -110,7 +116,76 @@ class UsageCollector(private val context: Context) {
         }
     }
 
-    private data class AppBytes(var rx: Long = 0, var tx: Long = 0)
+    fun hotspotUsage(start: Long, end: Long, network: String?): Map<String, Any?> {
+        val state = database.hotspotState()
+        if (!hasUsageAccess(context)) return mapOf(
+            "state" to state["state"],
+            "stateQuality" to state["quality"],
+            "sessionStartedAt" to state["startedAt"],
+            "lastUpdatedAt" to state["observedAt"],
+            "usageAvailable" to false,
+            "rxBytes" to 0L, "txBytes" to 0L,
+            "monthRxBytes" to 0L, "monthTxBytes" to 0L,
+            "sessionRxBytes" to 0L, "sessionTxBytes" to 0L,
+        )
+
+        val total = queryTetheringTotals(start, end, network)
+        val monthStart = LocalDate.now(ZoneId.systemDefault()).withDayOfMonth(1)
+            .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val month = queryTetheringTotals(monthStart, end, network)
+        val sessionStart = state["startedAt"] as? Long
+        val session = if (state["state"] == "active" && sessionStart != null)
+            queryTetheringTotals(sessionStart, end, network) else AppBytes()
+        database.putSetting("last_hotspot_usage_at", end.toString())
+        return mapOf(
+            "state" to state["state"],
+            "stateQuality" to state["quality"],
+            "sessionStartedAt" to sessionStart,
+            "lastUpdatedAt" to end,
+            "usageAvailable" to total.queried,
+            "rxBytes" to total.rx, "txBytes" to total.tx,
+            "monthRxBytes" to month.rx, "monthTxBytes" to month.tx,
+            "sessionRxBytes" to session.rx, "sessionTxBytes" to session.tx,
+        )
+    }
+
+    private fun queryTetheringTotals(start: Long, end: Long, network: String?): AppBytes {
+        val total = AppBytes()
+        if (network == null || network == "all" || network == "hotspot" || network == "wifi") {
+            addTetheringTotal(total, ConnectivityManager.TYPE_WIFI, start, end)
+        }
+        if (network == null || network == "all" || network == "hotspot" || network == "mobile") {
+            addTetheringTotal(total, ConnectivityManager.TYPE_MOBILE, start, end)
+        }
+        return total
+    }
+
+    private fun addTetheringTotal(total: AppBytes, legacyType: Int, start: Long, end: Long) {
+        var stats: NetworkStats? = null
+        try {
+            val manager = context.getSystemService(NetworkStatsManager::class.java)
+            stats = manager.querySummary(legacyType, null, start, end)
+            total.queried = true
+            val bucket = NetworkStats.Bucket()
+            while (stats.hasNextBucket()) {
+                stats.getNextBucket(bucket)
+                if (bucket.uid == NetworkStats.Bucket.UID_TETHERING) {
+                    total.rx += bucket.rxBytes.coerceAtLeast(0)
+                    total.tx += bucket.txBytes.coerceAtLeast(0)
+                }
+            }
+        } catch (_: SecurityException) {
+            // Usage access or this transport's counters are unavailable.
+        } catch (_: RuntimeException) {
+            // OEM NetworkStats implementations can reject an individual transport.
+        } finally {
+            stats?.close()
+        }
+    }
+
+    private data class AppBytes(
+        var rx: Long = 0, var tx: Long = 0, var queried: Boolean = false,
+    )
 
     private fun evaluatePlanAlerts() {
         val plan = database.plan() ?: return

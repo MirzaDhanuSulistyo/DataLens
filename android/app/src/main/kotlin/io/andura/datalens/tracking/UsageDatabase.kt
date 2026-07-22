@@ -72,11 +72,29 @@ class UsageDatabase(context: Context) :
             )"""
         )
         db.execSQL("CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        createHotspotSessionTable(db)
         db.execSQL("CREATE INDEX delta_time_idx ON usage_delta(interval_end_utc)")
         db.execSQL("CREATE INDEX delta_app_idx ON usage_delta(app_identity_id, interval_end_utc)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) createHotspotSessionTable(db)
+    }
+
+    private fun createHotspotSessionTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS hotspot_session(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at_utc INTEGER NOT NULL,
+                ended_at_utc INTEGER,
+                detection_quality TEXT NOT NULL,
+                open_marker INTEGER UNIQUE CHECK(open_marker IS NULL OR open_marker = 1)
+            )"""
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS hotspot_session_time_idx ON hotspot_session(started_at_utc, ended_at_utc)"
+        )
+    }
 
     @Synchronized
     fun putSetting(key: String, value: String) {
@@ -142,10 +160,18 @@ class UsageDatabase(context: Context) :
     }
 
     @Synchronized
-    fun upsertApp(uid: Int, packageName: String?, label: String, now: Long): Long {
-        val key = "android:$uid:${packageName ?: "unknown"}"
+    fun upsertApp(uid: Int, packageName: String?, label: String, now: Long): Long =
+        upsertIdentity("android:$uid:${packageName ?: "unknown"}", packageName, label, now)
+
+    @Synchronized
+    fun upsertTethering(now: Long): Long =
+        upsertIdentity(TETHERING_PLATFORM_KEY, null, "Hotspot & tethering", now)
+
+    private fun upsertIdentity(
+        platformKey: String, packageName: String?, label: String, now: Long,
+    ): Long {
         writableDatabase.insertWithOnConflict("app_identity", null, ContentValues().apply {
-            put("platform_key", key)
+            put("platform_key", platformKey)
             put("package_or_bundle_id", packageName)
             put("label_snapshot", label)
             put("first_seen_at", now)
@@ -153,9 +179,9 @@ class UsageDatabase(context: Context) :
         }, SQLiteDatabase.CONFLICT_IGNORE)
         writableDatabase.update("app_identity", ContentValues().apply {
             put("label_snapshot", label); put("last_seen_at", now)
-        }, "platform_key = ?", arrayOf(key))
+        }, "platform_key = ?", arrayOf(platformKey))
         return readableDatabase.rawQuery(
-            "SELECT id FROM app_identity WHERE platform_key = ?", arrayOf(key)
+            "SELECT id FROM app_identity WHERE platform_key = ?", arrayOf(platformKey)
         ).use { it.moveToFirst(); it.getLong(0) }
     }
 
@@ -185,6 +211,7 @@ class UsageDatabase(context: Context) :
 
     @Synchronized
     fun summary(start: Long, end: Long, network: String? = null): Map<String, Long> {
+        if (network == "hotspot") return hotspotSummary(start, end)
         val filter = if (network == null || network == "all") "" else " AND network_type = ?"
         val args = mutableListOf(start.toString(), end.toString())
         if (filter.isNotEmpty()) args.add(network!!)
@@ -193,6 +220,24 @@ class UsageDatabase(context: Context) :
                FROM usage_delta WHERE app_identity_id IS NULL
                AND interval_end_utc > ? AND interval_start_utc < ?$filter""",
             args.toTypedArray(),
+        ).use {
+            it.moveToFirst(); mapOf("rxBytes" to it.getLong(0), "txBytes" to it.getLong(1))
+        }
+    }
+
+    @Synchronized
+    fun hotspotSummary(
+        start: Long, end: Long, network: String? = null,
+    ): Map<String, Long> {
+        val filter = if (network == null || network == "all" || network == "hotspot") ""
+            else " AND d.network_type = ?"
+        val args = mutableListOf(TETHERING_PLATFORM_KEY, start.toString(), end.toString())
+        if (filter.isNotEmpty()) args.add(network!!)
+        return readableDatabase.rawQuery(
+            """SELECT COALESCE(SUM(d.rx_bytes), 0), COALESCE(SUM(d.tx_bytes), 0)
+               FROM usage_delta d JOIN app_identity a ON a.id = d.app_identity_id
+               WHERE a.platform_key = ? AND d.interval_end_utc > ?
+               AND d.interval_start_utc < ?$filter""", args.toTypedArray(),
         ).use {
             it.moveToFirst(); mapOf("rxBytes" to it.getLong(0), "txBytes" to it.getLong(1))
         }
@@ -210,6 +255,7 @@ class UsageDatabase(context: Context) :
                            THEN 'background activity' ELSE 'state unavailable' END
                FROM usage_delta d JOIN app_identity a ON a.id = d.app_identity_id
                WHERE d.interval_end_utc > ? AND d.interval_start_utc < ?$filter
+               AND a.platform_key != '$TETHERING_PLATFORM_KEY'
                GROUP BY a.id ORDER BY SUM(d.rx_bytes + d.tx_bytes) DESC""",
             args.toTypedArray(),
         ).use { cursor ->
@@ -225,20 +271,66 @@ class UsageDatabase(context: Context) :
 
     @Synchronized
     fun dailyUsage(start: Long, end: Long, network: String? = null): List<Map<String, Any>> {
-        val filter = if (network == null || network == "all") "" else " AND network_type = ?"
-        val args = mutableListOf(start.toString(), end.toString())
+        val hotspot = network == "hotspot"
+        val filter = if (network == null || network == "all" || hotspot) "" else " AND d.network_type = ?"
+        val args = mutableListOf<String>()
+        if (hotspot) args.add(TETHERING_PLATFORM_KEY)
+        args.add(start.toString()); args.add(end.toString())
         if (filter.isNotEmpty()) args.add(network!!)
+        val source = if (hotspot)
+            "usage_delta d JOIN app_identity a ON a.id = d.app_identity_id"
+        else "usage_delta d"
+        val attribution = if (hotspot) "a.platform_key = ?" else "d.app_identity_id IS NULL"
         return readableDatabase.rawQuery(
-            """SELECT strftime('%Y-%m-%d', interval_end_utc / 1000, 'unixepoch', 'localtime') day,
-                      SUM(rx_bytes), SUM(tx_bytes)
-               FROM usage_delta WHERE app_identity_id IS NULL
-               AND interval_end_utc > ? AND interval_start_utc < ?$filter
+            """SELECT strftime('%Y-%m-%d', d.interval_end_utc / 1000, 'unixepoch', 'localtime') day,
+                      SUM(d.rx_bytes), SUM(d.tx_bytes)
+               FROM $source WHERE $attribution
+               AND d.interval_end_utc > ? AND d.interval_start_utc < ?$filter
                GROUP BY day ORDER BY day""", args.toTypedArray()
         ).use { cursor ->
             buildList { while (cursor.moveToNext()) add(mapOf(
                 "date" to cursor.getString(0), "rxBytes" to cursor.getLong(1), "txBytes" to cursor.getLong(2)
             )) }
         }
+    }
+
+    @Synchronized
+    fun recordHotspotState(active: Boolean?, observedAt: Long, quality: String) {
+        val state = when (active) { true -> "active"; false -> "inactive"; null -> "unknown" }
+        val openSession = readableDatabase.rawQuery(
+            "SELECT id FROM hotspot_session WHERE ended_at_utc IS NULL ORDER BY id DESC LIMIT 1", null
+        ).use { if (it.moveToFirst()) it.getLong(0) else null }
+        when {
+            active == true && openSession == null -> writableDatabase.insertWithOnConflict(
+                "hotspot_session", null, ContentValues().apply {
+                    put("started_at_utc", observedAt); put("detection_quality", quality)
+                    put("open_marker", 1)
+                }, SQLiteDatabase.CONFLICT_IGNORE,
+            )
+            active != true && openSession != null -> writableDatabase.update(
+                "hotspot_session", ContentValues().apply {
+                    put("ended_at_utc", observedAt); putNull("open_marker")
+                },
+                "id = ?", arrayOf(openSession.toString()),
+            )
+        }
+        putSetting("hotspot_state", state)
+        putSetting("hotspot_state_observed_at", observedAt.toString())
+        putSetting("hotspot_state_quality", quality)
+    }
+
+    @Synchronized
+    fun hotspotState(): Map<String, Any?> {
+        val state = setting("hotspot_state") ?: "unknown"
+        val openStart = if (state == "active") readableDatabase.rawQuery(
+            "SELECT started_at_utc FROM hotspot_session WHERE ended_at_utc IS NULL ORDER BY id DESC LIMIT 1", null
+        ).use { if (it.moveToFirst()) it.getLong(0) else null } else null
+        return mapOf(
+            "state" to state,
+            "startedAt" to openStart,
+            "observedAt" to setting("hotspot_state_observed_at")?.toLongOrNull(),
+            "quality" to (setting("hotspot_state_quality") ?: "unavailable"),
+        )
     }
 
     @Synchronized
@@ -278,7 +370,7 @@ class UsageDatabase(context: Context) :
     fun deleteAll() {
         writableDatabase.beginTransaction()
         try {
-            listOf("usage_delta", "usage_snapshot", "app_identity", "alert_event", "data_plan", "settings")
+            listOf("usage_delta", "usage_snapshot", "app_identity", "hotspot_session", "alert_event", "data_plan", "settings")
                 .forEach { writableDatabase.delete(it, null, null) }
             writableDatabase.setTransactionSuccessful()
         } finally { writableDatabase.endTransaction() }
@@ -289,5 +381,8 @@ class UsageDatabase(context: Context) :
         val networkType: String, val rxTotal: Long, val txTotal: Long, val quality: String,
     )
 
-    companion object { private const val VERSION = 1 }
+    companion object {
+        const val TETHERING_PLATFORM_KEY = "android:tethering"
+        private const val VERSION = 2
+    }
 }

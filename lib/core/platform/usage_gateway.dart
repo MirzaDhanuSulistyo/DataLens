@@ -110,6 +110,54 @@ class DailyUsageRecord {
       );
 }
 
+class HotspotUsage {
+  const HotspotUsage({
+    this.state = 'unknown',
+    this.stateQuality = 'unavailable',
+    this.usageAvailable = false,
+    this.today = const UsageTotal(),
+    this.month = const UsageTotal(),
+    this.session = const UsageTotal(),
+    this.sessionStartedAt,
+    this.lastUpdatedAt,
+  });
+
+  final String state;
+  final String stateQuality;
+  final bool usageAvailable;
+  final UsageTotal today;
+  final UsageTotal month;
+  final UsageTotal session;
+  final DateTime? sessionStartedAt;
+  final DateTime? lastUpdatedAt;
+
+  bool get active => state == 'active';
+  bool get stateAvailable => state != 'unknown';
+
+  factory HotspotUsage.fromMap(Map<Object?, Object?> map) => HotspotUsage(
+    state: map['state'] as String? ?? 'unknown',
+    stateQuality: map['stateQuality'] as String? ?? 'unavailable',
+    usageAvailable: map['usageAvailable'] as bool? ?? false,
+    today: UsageTotal.fromMap(map),
+    month: UsageTotal(
+      rxBytes: (map['monthRxBytes'] as num?)?.toInt() ?? 0,
+      txBytes: (map['monthTxBytes'] as num?)?.toInt() ?? 0,
+    ),
+    session: UsageTotal(
+      rxBytes: (map['sessionRxBytes'] as num?)?.toInt() ?? 0,
+      txBytes: (map['sessionTxBytes'] as num?)?.toInt() ?? 0,
+    ),
+    sessionStartedAt: switch (map['sessionStartedAt']) {
+      final num value => DateTime.fromMillisecondsSinceEpoch(value.toInt()),
+      _ => null,
+    },
+    lastUpdatedAt: switch (map['lastUpdatedAt']) {
+      final num value => DateTime.fromMillisecondsSinceEpoch(value.toInt()),
+      _ => null,
+    },
+  );
+}
+
 class DataPlan {
   const DataPlan({
     required this.capBytes,
@@ -172,6 +220,11 @@ abstract interface class UsageGateway {
     String network = 'all',
   });
   Future<List<DailyUsageRecord>> daily(
+    DateTime start,
+    DateTime end, {
+    String network = 'all',
+  });
+  Future<HotspotUsage> hotspotUsage(
     DateTime start,
     DateTime end, {
     String network = 'all',
@@ -289,6 +342,19 @@ class MethodChannelUsageGateway implements UsageGateway {
         )
         .toList();
   }, const []);
+
+  @override
+  Future<HotspotUsage> hotspotUsage(
+    DateTime start,
+    DateTime end, {
+    String network = 'all',
+  }) => _safe(() async {
+    final value = await _channel.invokeMapMethod<Object?, Object?>(
+      'getHotspotUsage',
+      _range(start, end, network),
+    );
+    return HotspotUsage.fromMap(value ?? const {});
+  }, const HotspotUsage());
 
   @override
   Future<DataPlan?> getPlan() => _safe(() async {

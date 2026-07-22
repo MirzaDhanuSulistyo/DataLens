@@ -14,6 +14,7 @@ class UsageController extends ChangeNotifier {
   List<AppUsageRecord> apps = const [];
   List<DailyUsageRecord> dailyUsage = const [];
   List<AlertRecord> alerts = const [];
+  HotspotUsage hotspot = const HotspotUsage();
   DataPlan? plan;
   String network = 'all';
   bool loading = true;
@@ -54,8 +55,14 @@ class UsageController extends ChangeNotifier {
           network: network,
         ),
         gateway.alerts(),
+        gateway.hotspotUsage(
+          startToday,
+          now,
+          network: network == 'hotspot' ? 'all' : network,
+        ),
       ]);
-      today = values[0] as UsageTotal;
+      hotspot = values[5] as HotspotUsage;
+      today = network == 'hotspot' ? hotspot.today : values[0] as UsageTotal;
       cycleUsage = values[1] as UsageTotal;
       apps = values[2] as List<AppUsageRecord>;
       dailyUsage = values[3] as List<DailyUsageRecord>;
@@ -72,6 +79,7 @@ class UsageController extends ChangeNotifier {
     network = switch (value) {
       'Mobile' => 'mobile',
       'Wi-Fi' => 'wifi',
+      'Hotspot' => 'hotspot',
       _ => 'all',
     };
     await refreshData();

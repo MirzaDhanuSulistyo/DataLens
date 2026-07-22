@@ -22,6 +22,7 @@ class MonitoringService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var collector: UsageCollector
     private lateinit var database: UsageDatabase
+    private lateinit var hotspotStateMonitor: HotspotStateMonitor
     private var lastRx = 0L
     private var lastTx = 0L
     private var lastElapsed = 0L
@@ -50,6 +51,7 @@ class MonitoringService : Service() {
         super.onCreate()
         collector = UsageCollector(this)
         database = UsageDatabase(this)
+        hotspotStateMonitor = HotspotStateMonitor(this).also { it.start() }
         notificationManager().createNotificationChannel(NotificationChannel(
             CHANNEL_ID, "Data usage monitoring", NotificationManager.IMPORTANCE_LOW,
         ).apply { description = "Shows live transfer speed while monitoring is enabled" })
@@ -72,6 +74,7 @@ class MonitoringService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacks(tick)
+        hotspotStateMonitor.stop()
         super.onDestroy()
     }
 
