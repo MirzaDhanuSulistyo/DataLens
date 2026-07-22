@@ -21,9 +21,10 @@ Package visibility is limited to launchable applications. `QUERY_ALL_PACKAGES` i
 ## Data safety draft
 
 - Data collected by the app: device/app byte totals, app label/package identifier, alert preferences, data-plan configuration.
-- Data shared off device: none.
+- Data shared off device automatically: none. User-initiated CSV exports and JSON backups are written only to the destination the user selects in Android's system document picker.
 - Processing: on device only.
 - Encryption in transit: not applicable; DataLens has no backend transport.
+- Export/backup: user-initiated local document creation; DataLens has no upload destination or backend.
 - Deletion: Settings → Delete all local data.
 - Retention: user-selectable 30, 90, or 365 days, or forever; default 365 days.
 

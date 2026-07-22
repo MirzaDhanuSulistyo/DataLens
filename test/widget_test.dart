@@ -59,6 +59,26 @@ void main() {
     expect(find.text('Browser'), findsOneWidget);
   });
 
+  testWidgets('app details can exclude an app from intelligence alerts', (
+    tester,
+  ) async {
+    final gateway = FakeUsageGateway();
+    await tester.pumpWidget(DataLensApp(gateway: gateway));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Apps').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Browser').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Exclude from intelligence alerts'), findsOneWidget);
+    await tester.ensureVisible(find.text('Exclude from intelligence alerts'));
+    await tester.tap(find.text('Exclude from intelligence alerts'));
+    await tester.pumpAndSettle();
+
+    expect(gateway.appRecords.single.excludedFromAlerts, isTrue);
+  });
+
   testWidgets('initial deep link opens the requested destination', (
     tester,
   ) async {
@@ -72,7 +92,9 @@ void main() {
     );
   });
 
-  testWidgets('settings exposes widget and retention controls', (tester) async {
+  testWidgets('settings exposes widget, portability, and OEM controls', (
+    tester,
+  ) async {
     await tester.pumpWidget(DataLensApp(gateway: FakeUsageGateway()));
     await tester.pumpAndSettle();
 
@@ -81,7 +103,14 @@ void main() {
 
     expect(find.text('Home screen widget'), findsOneWidget);
     expect(find.text('History retention'), findsOneWidget);
-    expect(find.text('Widgets and hardening · Phase 4'), findsOneWidget);
+    expect(find.text('Google Pixel Test · Android 15'), findsOneWidget);
+    expect(find.text('Export usage as CSV'), findsOneWidget);
+    expect(find.text('Create local backup'), findsOneWidget);
+    expect(find.text('Restore local backup'), findsOneWidget);
+    expect(
+      find.text('Android P2 · Portability and compatibility'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('history switches between hourly and daily usage', (

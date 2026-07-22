@@ -2,7 +2,7 @@
 
 A privacy-first Flutter data-usage monitor. Android is the primary platform; unsupported iOS counters are never presented as measured data.
 
-## Current milestone: Phase 4 — Widgets and hardening
+## Current milestone: Android P2 — Portability and compatibility
 
 Implemented:
 
@@ -23,6 +23,10 @@ Implemented:
 - Widget, notification, and `datalens://open/<screen>` deep links
 - Automatic 30/90/365-day or forever retention controls
 - Prominent usage-access disclosure, accessibility semantics, and Play policy documentation
+- CSV usage export through Android's system document picker
+- Streaming JSON backup/restore for all local history, plans, settings, alerts, and exclusions
+- Per-app exclusions for unusual-usage, new-app, and background intelligence alerts
+- Manufacturer-aware setup guidance for Samsung, Xiaomi, Huawei/Honor, OnePlus/Oppo/Realme, Vivo, and standard Android
 
 Android totals and OEM behavior still require the physical-device acceptance matrix described in [`PRD.md`](PRD.md). Per-app and tethering results depend on usage access and OEM support. Hotspot traffic is aggregate: Android does not identify apps used on connected devices. DataLens stores counters and app labels only; it does not inspect traffic payloads, URLs, or messages.
 
@@ -44,6 +48,9 @@ In the app:
 4. Turn on Android hotspot/tethering and select the **Hotspot** filter to see aggregate usage and daily history.
 5. Configure **Data plan & billing cycle** to enable threshold alerts.
 6. Add the **DataLens** home-screen widget from the Android widget picker and configure it in Settings.
+7. Use **Settings → Data portability** to export CSV data or create/restore a local backup.
+8. Open an app's details to exclude it from intelligence alerts without removing its usage history.
+9. Follow **Settings → Device setup** if the OEM stops background sampling.
 
 Deep links support `overview`, `apps`, `history`, `alerts`, and `settings`, for example `datalens://open/history`.
 

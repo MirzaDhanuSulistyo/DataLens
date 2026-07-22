@@ -1230,60 +1230,77 @@ class _AppsScreenState extends State<_AppsScreen> {
   }
 
   void _showAppDetails(BuildContext context, AppUsageRecord app) {
+    var excludedFromAlerts = app.excludedFromAlerts;
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
-      builder: (context) {
-        final tokens = AnduraThemeTokens.of(context);
-        return Padding(
-          padding: EdgeInsets.all(tokens.space6),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                app.label,
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              SizedBox(height: tokens.space3),
-              Text(app.packageName ?? 'Package unavailable'),
-              SizedBox(height: tokens.space4),
-              AnduraCard(
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: AnduraStat(
-                        label: 'DOWNLOAD',
-                        value: formatBytes(app.rxBytes),
-                      ),
+      isScrollControlled: true,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setSheetState) {
+          final tokens = AnduraThemeTokens.of(context);
+          return SafeArea(
+            child: SingleChildScrollView(
+              padding: EdgeInsets.all(tokens.space6),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    app.label,
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
                     ),
-                    Expanded(
-                      child: AnduraStat(
-                        label: 'UPLOAD',
-                        value: formatBytes(app.txBytes),
-                      ),
+                  ),
+                  SizedBox(height: tokens.space3),
+                  Text(app.packageName ?? 'Package unavailable'),
+                  SizedBox(height: tokens.space4),
+                  AnduraCard(
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: AnduraStat(
+                            label: 'DOWNLOAD',
+                            value: formatBytes(app.rxBytes),
+                          ),
+                        ),
+                        Expanded(
+                          child: AnduraStat(
+                            label: 'UPLOAD',
+                            value: formatBytes(app.txBytes),
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                  SizedBox(height: tokens.space3),
+                  Text(
+                    'Activity state: ${app.foregroundState}',
+                    style: TextStyle(color: tokens.muted),
+                  ),
+                  SizedBox(height: tokens.space2),
+                  Text(
+                    app.baselineMature
+                        ? 'Usual daily usage: ${formatBytes(app.baselineBytes ?? 0)} · ${app.baselineSampleCount} complete days learned'
+                        : 'Baseline learning: ${app.baselineSampleCount} of 7 complete days',
+                    style: TextStyle(color: tokens.muted),
+                  ),
+                  const AnduraDivider(),
+                  AnduraSwitch(
+                    label: 'Exclude from intelligence alerts',
+                    subtitle:
+                        'Usage remains in totals and history, but unusual, new-app, and background alerts are suppressed.',
+                    value: excludedFromAlerts,
+                    onChanged: (value) async {
+                      setSheetState(() => excludedFromAlerts = value);
+                      await widget.controller.setAppExcluded(app.id, value);
+                    },
+                  ),
+                ],
               ),
-              SizedBox(height: tokens.space3),
-              Text(
-                'Activity state: ${app.foregroundState}',
-                style: TextStyle(color: tokens.muted),
-              ),
-              SizedBox(height: tokens.space2),
-              Text(
-                app.baselineMature
-                    ? 'Usual daily usage: ${formatBytes(app.baselineBytes ?? 0)} · ${app.baselineSampleCount} complete days learned'
-                    : 'Baseline learning: ${app.baselineSampleCount} of 7 complete days',
-                style: TextStyle(color: tokens.muted),
-              ),
-            ],
-          ),
-        );
-      },
+            ),
+          );
+        },
+      ),
     );
   }
 }
@@ -1596,6 +1613,51 @@ class _SettingsScreen extends StatelessWidget {
             loading: controller.loading,
             onPressed: controller.reconcile,
           ),
+        if (capability.platform == 'android') ...[
+          SizedBox(height: tokens.space6),
+          const AnduraSectionHeader(title: 'Device setup'),
+          SizedBox(height: tokens.space3),
+          AnduraCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  controller.deviceGuidance.title,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                SizedBox(height: tokens.space1),
+                Text(
+                  '${controller.deviceGuidance.manufacturer} ${controller.deviceGuidance.model} · Android ${controller.deviceGuidance.androidVersion}',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: tokens.muted),
+                ),
+                SizedBox(height: tokens.space3),
+                for (final step in controller.deviceGuidance.steps)
+                  Padding(
+                    padding: EdgeInsets.only(bottom: tokens.space2),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('•  '),
+                        Expanded(child: Text(step)),
+                      ],
+                    ),
+                  ),
+                SizedBox(height: tokens.space2),
+                AnduraButton(
+                  label: controller.deviceGuidance.optimizationExempt
+                      ? 'Review battery settings'
+                      : 'Open battery optimization settings',
+                  icon: Icons.battery_saver_outlined,
+                  onPressed: controller.openBatterySettings,
+                ),
+              ],
+            ),
+          ),
+        ],
         SizedBox(height: tokens.space6),
         const AnduraSectionHeader(title: 'Usage intelligence'),
         SizedBox(height: tokens.space3),
@@ -1810,6 +1872,53 @@ class _SettingsScreen extends StatelessWidget {
             ],
           ),
         ),
+        if (capability.platform == 'android') ...[
+          SizedBox(height: tokens.space6),
+          const AnduraSectionHeader(title: 'Data portability'),
+          SizedBox(height: tokens.space2),
+          Text(
+            'Export spreadsheet data or move all local DataLens data between Android devices.',
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: tokens.muted),
+          ),
+          SizedBox(height: tokens.space3),
+          AnduraSettingsTile(
+            icon: Icons.table_view_outlined,
+            color: tokens.accent,
+            title: 'Export usage as CSV',
+            onTap: controller.dataOperationInProgress
+                ? null
+                : controller.exportCsv,
+          ),
+          AnduraSettingsTile(
+            icon: Icons.backup_outlined,
+            color: tokens.accent,
+            title: 'Create local backup',
+            onTap: controller.dataOperationInProgress
+                ? null
+                : controller.createBackup,
+          ),
+          AnduraSettingsTile(
+            icon: Icons.settings_backup_restore,
+            color: tokens.warning,
+            title: 'Restore local backup',
+            onTap: controller.dataOperationInProgress
+                ? null
+                : () => _confirmRestore(context, controller),
+          ),
+          if (controller.dataOperationInProgress)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          if (controller.dataOperationMessage != null)
+            AnduraAlert(
+              title: 'Data portability',
+              message: controller.dataOperationMessage!,
+              intent: AnduraIntent.info,
+            ),
+        ],
         SizedBox(height: tokens.space6),
         const AnduraSectionHeader(title: 'Plan and privacy'),
         SizedBox(height: tokens.space3),
@@ -1849,7 +1958,7 @@ class _SettingsScreen extends StatelessWidget {
         ),
         SizedBox(height: tokens.space3),
         Text(
-          'Widgets and hardening · Phase 4',
+          'Android P2 · Portability and compatibility',
           textAlign: TextAlign.center,
           style: Theme.of(
             context,
@@ -1965,6 +2074,32 @@ class _SettingsScreen extends StatelessWidget {
       ),
     );
     if (selected != null) await controller.updateRetentionDays(selected);
+  }
+
+  Future<void> _confirmRestore(
+    BuildContext context,
+    UsageController controller,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Restore a local backup?'),
+        content: const Text(
+          'Restoring replaces all current usage history, app identities, alerts, plans, preferences, and exclusions. Create a current backup first if needed.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Choose backup'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) await controller.restoreBackup();
   }
 
   Future<void> _confirmDelete(

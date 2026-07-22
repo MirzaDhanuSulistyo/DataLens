@@ -91,6 +91,7 @@ class AppUsageRecord {
     this.packageName,
     this.baselineSampleCount = 0,
     this.baselineBytes,
+    this.excludedFromAlerts = false,
   });
   final int id;
   final String label;
@@ -100,6 +101,7 @@ class AppUsageRecord {
   final String foregroundState;
   final int baselineSampleCount;
   final int? baselineBytes;
+  final bool excludedFromAlerts;
   int get totalBytes => rxBytes + txBytes;
   bool get baselineMature => baselineSampleCount >= 7;
 
@@ -112,6 +114,44 @@ class AppUsageRecord {
     foregroundState: map['foregroundState'] as String? ?? 'unknown',
     baselineSampleCount: (map['baselineSampleCount'] as num?)?.toInt() ?? 0,
     baselineBytes: (map['baselineBytes'] as num?)?.toInt(),
+    excludedFromAlerts: map['excludedFromAlerts'] as bool? ?? false,
+  );
+}
+
+class DeviceGuidance {
+  const DeviceGuidance({
+    required this.manufacturer,
+    required this.model,
+    required this.androidVersion,
+    required this.title,
+    required this.steps,
+    required this.optimizationExempt,
+  });
+
+  const DeviceGuidance.unsupported()
+    : manufacturer = 'Unknown',
+      model = 'Unknown',
+      androidVersion = '',
+      title = 'Device guidance unavailable',
+      steps = const [],
+      optimizationExempt = false;
+
+  final String manufacturer;
+  final String model;
+  final String androidVersion;
+  final String title;
+  final List<String> steps;
+  final bool optimizationExempt;
+
+  factory DeviceGuidance.fromMap(Map<Object?, Object?> map) => DeviceGuidance(
+    manufacturer: map['manufacturer'] as String? ?? 'Unknown',
+    model: map['model'] as String? ?? 'Unknown',
+    androidVersion: map['androidVersion'] as String? ?? '',
+    title: map['title'] as String? ?? 'Background setup',
+    steps: (map['steps'] as List<Object?>? ?? const [])
+        .whereType<String>()
+        .toList(),
+    optimizationExempt: map['optimizationExempt'] as bool? ?? false,
   );
 }
 
@@ -344,6 +384,12 @@ abstract interface class UsageGateway {
   Future<void> saveWidgetPreferences(WidgetPreferences preferences);
   Future<int> getRetentionDays();
   Future<void> saveRetentionDays(int days);
+  Future<void> setAppExcluded(int appId, bool excluded);
+  Future<DeviceGuidance> getDeviceGuidance();
+  Future<void> openBatterySettings();
+  Future<bool> exportCsv();
+  Future<bool> createBackup();
+  Future<bool> restoreBackup();
   Future<void> deleteAllData();
 }
 
@@ -582,6 +628,44 @@ class MethodChannelUsageGateway implements UsageGateway {
   @override
   Future<void> saveRetentionDays(int days) =>
       _safe(() => _channel.invokeMethod<void>('saveRetentionDays', days), null);
+
+  @override
+  Future<void> setAppExcluded(int appId, bool excluded) => _safe(
+    () => _channel.invokeMethod<void>('setAppExcluded', {
+      'appId': appId,
+      'excluded': excluded,
+    }),
+    null,
+  );
+
+  @override
+  Future<DeviceGuidance> getDeviceGuidance() => _safe(() async {
+    final value = await _channel.invokeMapMethod<Object?, Object?>(
+      'getDeviceGuidance',
+    );
+    return DeviceGuidance.fromMap(value ?? const {});
+  }, const DeviceGuidance.unsupported());
+
+  @override
+  Future<void> openBatterySettings() =>
+      _safe(() => _channel.invokeMethod<void>('openBatterySettings'), null);
+
+  Future<bool> _documentOperation(String method) async {
+    try {
+      return await _channel.invokeMethod<bool>(method) ?? false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
+  @override
+  Future<bool> exportCsv() => _documentOperation('exportCsv');
+
+  @override
+  Future<bool> createBackup() => _documentOperation('createBackup');
+
+  @override
+  Future<bool> restoreBackup() => _documentOperation('restoreBackup');
 
   @override
   Future<void> deleteAllData() =>

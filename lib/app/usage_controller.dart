@@ -19,7 +19,10 @@ class UsageController extends ChangeNotifier {
   DataPlan? plan;
   AlertPreferences alertPreferences = const AlertPreferences();
   WidgetPreferences widgetPreferences = const WidgetPreferences();
+  DeviceGuidance deviceGuidance = const DeviceGuidance.unsupported();
   int retentionDays = 365;
+  bool dataOperationInProgress = false;
+  String? dataOperationMessage;
   int selectedDestination = 0;
   String network = 'all';
   bool loading = true;
@@ -71,6 +74,7 @@ class UsageController extends ChangeNotifier {
       plan = await gateway.getPlan();
       alertPreferences = await gateway.getAlertPreferences();
       widgetPreferences = await gateway.getWidgetPreferences();
+      deviceGuidance = await gateway.getDeviceGuidance();
       retentionDays = await gateway.getRetentionDays();
       final now = DateTime.now();
       final startToday = DateTime(now.year, now.month, now.day);
@@ -177,7 +181,59 @@ class UsageController extends ChangeNotifier {
     await refreshData();
   }
 
+  Future<void> setAppExcluded(int appId, bool excluded) async {
+    await gateway.setAppExcluded(appId, excluded);
+    await refreshData();
+  }
+
   Future<void> openOverlaySettings() => gateway.openOverlaySettings();
+
+  Future<void> openBatterySettings() => gateway.openBatterySettings();
+
+  Future<bool> exportCsv() =>
+      _runDataOperation(gateway.exportCsv, success: 'CSV export saved.');
+
+  Future<bool> createBackup() =>
+      _runDataOperation(gateway.createBackup, success: 'Backup saved.');
+
+  Future<bool> restoreBackup() async {
+    final restored = await _runDataOperation(
+      gateway.restoreBackup,
+      success: 'Backup restored.',
+    );
+    if (restored) {
+      await refreshData();
+      if (capabilities.monitoring) _startLiveUpdates();
+    }
+    return restored;
+  }
+
+  Future<bool> _runDataOperation(
+    Future<bool> Function() action, {
+    required String success,
+  }) async {
+    if (dataOperationInProgress) return false;
+    dataOperationInProgress = true;
+    dataOperationMessage = null;
+    notifyListeners();
+    try {
+      final completed = await action();
+      dataOperationMessage = completed ? success : 'Operation cancelled.';
+      return completed;
+    } catch (_) {
+      dataOperationMessage =
+          'Operation failed. Check the selected file and try again.';
+      return false;
+    } finally {
+      dataOperationInProgress = false;
+      notifyListeners();
+    }
+  }
+
+  void clearDataOperationMessage() {
+    dataOperationMessage = null;
+    notifyListeners();
+  }
 
   Future<void> setOverlayEnabled(bool enabled) async {
     final applied = await gateway.setOverlayEnabled(enabled);

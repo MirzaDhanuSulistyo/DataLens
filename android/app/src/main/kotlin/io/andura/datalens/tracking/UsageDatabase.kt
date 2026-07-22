@@ -4,6 +4,13 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import android.util.JsonReader
+import android.util.JsonToken
+import android.util.JsonWriter
+import java.io.InputStream
+import java.io.OutputStream
+import java.io.OutputStreamWriter
+import java.time.Instant
 
 class UsageDatabase(context: Context) :
     SQLiteOpenHelper(context, "datalens.db", null, VERSION) {
@@ -34,7 +41,8 @@ class UsageDatabase(context: Context) :
                 package_or_bundle_id TEXT,
                 label_snapshot TEXT NOT NULL,
                 first_seen_at INTEGER NOT NULL,
-                last_seen_at INTEGER NOT NULL
+                last_seen_at INTEGER NOT NULL,
+                excluded_from_alerts INTEGER NOT NULL DEFAULT 0
             )"""
         )
         db.execSQL(
@@ -95,6 +103,9 @@ class UsageDatabase(context: Context) :
             db.execSQL("ALTER TABLE alert_event ADD COLUMN network_type TEXT")
             db.execSQL("ALTER TABLE alert_event ADD COLUMN foreground_state TEXT")
             createBaselineTable(db)
+        }
+        if (oldVersion < 4) {
+            db.execSQL("ALTER TABLE app_identity ADD COLUMN excluded_from_alerts INTEGER NOT NULL DEFAULT 0")
         }
     }
 
@@ -289,7 +300,8 @@ class UsageDatabase(context: Context) :
                            THEN 'background activity' ELSE 'state unavailable' END,
                       COALESCE((SELECT MAX(b.sample_count) FROM baseline b
                           WHERE b.app_identity_id = a.id), 0),
-                      (SELECT SUM(b.center) FROM baseline b WHERE b.app_identity_id = a.id)
+                      (SELECT SUM(b.center) FROM baseline b WHERE b.app_identity_id = a.id),
+                      a.excluded_from_alerts
                FROM usage_delta d JOIN app_identity a ON a.id = d.app_identity_id
                WHERE d.interval_end_utc > ? AND d.interval_start_utc < ?$filter
                AND a.platform_key != '$TETHERING_PLATFORM_KEY'
@@ -303,6 +315,7 @@ class UsageDatabase(context: Context) :
                     "txBytes" to cursor.getLong(4), "foregroundState" to cursor.getString(5),
                     "baselineSampleCount" to cursor.getInt(6),
                     "baselineBytes" to cursor.nullableLong(7),
+                    "excludedFromAlerts" to (cursor.getInt(8) == 1),
                 ))
             }
         }
@@ -434,7 +447,8 @@ class UsageDatabase(context: Context) :
             """SELECT d.app_identity_id, a.label_snapshot, d.network_type,
                       SUM(d.rx_bytes + d.tx_bytes),
                       SUM(CASE WHEN d.foreground_state = 'background'
-                          THEN d.rx_bytes + d.tx_bytes ELSE 0 END)
+                          THEN d.rx_bytes + d.tx_bytes ELSE 0 END),
+                      a.excluded_from_alerts
                FROM usage_delta d JOIN app_identity a ON a.id = d.app_identity_id
                WHERE d.interval_end_utc > ? AND d.interval_start_utc < ?
                AND a.platform_key != ?
@@ -443,7 +457,7 @@ class UsageDatabase(context: Context) :
         ).use { cursor -> buildList { while (cursor.moveToNext()) add(IntelligenceCandidate(
             appId = cursor.getLong(0), label = cursor.getString(1),
             network = cursor.getString(2), actualBytes = cursor.getLong(3),
-            backgroundBytes = cursor.getLong(4),
+            backgroundBytes = cursor.getLong(4), excludedFromAlerts = cursor.getInt(5) == 1,
         )) } }
 
     @Synchronized
@@ -508,6 +522,16 @@ class UsageDatabase(context: Context) :
     }
 
     @Synchronized
+    fun setAppExcluded(appId: Long, excluded: Boolean) {
+        writableDatabase.update(
+            "app_identity",
+            ContentValues().apply { put("excluded_from_alerts", if (excluded) 1 else 0) },
+            "id = ?",
+            arrayOf(appId.toString()),
+        )
+    }
+
+    @Synchronized
     fun retentionDays(): Int = setting("retention_days")?.toIntOrNull() ?: 365
 
     @Synchronized
@@ -546,14 +570,153 @@ class UsageDatabase(context: Context) :
     }
 
     @Synchronized
+    fun writeCsv(output: OutputStream) {
+        val writer = OutputStreamWriter(output, Charsets.UTF_8)
+        writer.append("interval_start_utc,interval_end_utc,scope,app_label,package_id,network,activity_state,download_bytes,upload_bytes,quality\n")
+        readableDatabase.rawQuery(
+            """SELECT d.interval_start_utc, d.interval_end_utc,
+                      CASE WHEN d.app_identity_id IS NULL THEN 'device' ELSE 'app' END,
+                      a.label_snapshot, a.package_or_bundle_id, d.network_type,
+                      d.foreground_state, d.rx_bytes, d.tx_bytes, d.quality
+               FROM usage_delta d LEFT JOIN app_identity a ON a.id = d.app_identity_id
+               ORDER BY d.interval_end_utc, d.id""",
+            null,
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                val values = listOf(
+                    Instant.ofEpochMilli(cursor.getLong(0)).toString(),
+                    Instant.ofEpochMilli(cursor.getLong(1)).toString(),
+                    cursor.getString(2),
+                    cursor.nullableString(3) ?: "",
+                    cursor.nullableString(4) ?: "",
+                    cursor.getString(5),
+                    cursor.getString(6),
+                    cursor.getLong(7).toString(),
+                    cursor.getLong(8).toString(),
+                    cursor.getString(9),
+                )
+                writer.append(values.joinToString(",") { csvField(it) }).append('\n')
+            }
+        }
+        writer.flush()
+    }
+
+    @Synchronized
+    fun writeBackup(output: OutputStream) {
+        val writer = JsonWriter(OutputStreamWriter(output, Charsets.UTF_8)).apply { setIndent("  ") }
+        writer.beginObject()
+        writer.name("format").value(BACKUP_FORMAT)
+        writer.name("version").value(BACKUP_VERSION.toLong())
+        writer.name("createdAt").value(System.currentTimeMillis())
+        writer.name("tables").beginObject()
+        backupSchemas.forEach { (table, _) ->
+            writer.name(table).beginArray()
+            readableDatabase.query(table, null, null, null, null, null, null).use { cursor ->
+                while (cursor.moveToNext()) {
+                    writer.beginObject()
+                    cursor.columnNames.forEachIndexed { index, column ->
+                        writer.name(column)
+                        when (cursor.getType(index)) {
+                            android.database.Cursor.FIELD_TYPE_NULL -> writer.nullValue()
+                            android.database.Cursor.FIELD_TYPE_INTEGER -> writer.value(cursor.getLong(index))
+                            android.database.Cursor.FIELD_TYPE_FLOAT -> writer.value(cursor.getDouble(index))
+                            android.database.Cursor.FIELD_TYPE_STRING -> writer.value(cursor.getString(index))
+                            else -> throw IllegalStateException("Unsupported backup value in $table.$column")
+                        }
+                    }
+                    writer.endObject()
+                }
+            }
+            writer.endArray()
+        }
+        writer.endObject()
+        writer.endObject()
+        writer.close()
+    }
+
+    @Synchronized
+    fun restoreBackup(input: InputStream) {
+        val reader = JsonReader(input.bufferedReader(Charsets.UTF_8))
+        var format: String? = null
+        var version: Int? = null
+        var restoredTables = false
+        writableDatabase.beginTransaction()
+        try {
+            reader.beginObject()
+            while (reader.hasNext()) {
+                when (reader.nextName()) {
+                    "format" -> format = reader.nextString()
+                    "version" -> version = reader.nextInt()
+                    "createdAt" -> reader.skipValue()
+                    "tables" -> {
+                        require(format == BACKUP_FORMAT) { "This is not a DataLens backup" }
+                        require(version == BACKUP_VERSION) { "Unsupported DataLens backup version" }
+                        clearTables(writableDatabase)
+                        reader.beginObject()
+                        while (reader.hasNext()) {
+                            val table = reader.nextName()
+                            val schema = backupSchemas[table]
+                                ?: throw IllegalArgumentException("Unknown backup table: $table")
+                            reader.beginArray()
+                            while (reader.hasNext()) {
+                                val values = readBackupRow(reader, schema)
+                                writableDatabase.insertOrThrow(table, null, values)
+                            }
+                            reader.endArray()
+                        }
+                        reader.endObject()
+                        restoredTables = true
+                    }
+                    else -> reader.skipValue()
+                }
+            }
+            reader.endObject()
+            require(restoredTables) { "Backup contains no DataLens data" }
+            writableDatabase.setTransactionSuccessful()
+        } finally {
+            writableDatabase.endTransaction()
+            reader.close()
+        }
+    }
+
+    private fun readBackupRow(reader: JsonReader, schema: Map<String, ValueType>): ContentValues {
+        val values = ContentValues()
+        reader.beginObject()
+        while (reader.hasNext()) {
+            val column = reader.nextName()
+            val type = schema[column] ?: throw IllegalArgumentException("Unknown backup column: $column")
+            if (reader.peek() == JsonToken.NULL) {
+                reader.nextNull()
+                values.putNull(column)
+            } else when (type) {
+                ValueType.INTEGER -> values.put(column, reader.nextLong())
+                ValueType.REAL -> values.put(column, reader.nextDouble())
+                ValueType.TEXT -> values.put(column, reader.nextString())
+            }
+        }
+        reader.endObject()
+        return values
+    }
+
+    private fun clearTables(db: SQLiteDatabase) {
+        listOf("baseline", "usage_delta", "usage_snapshot", "hotspot_session", "alert_event", "app_identity", "data_plan", "settings")
+            .forEach { db.delete(it, null, null) }
+    }
+
+    @Synchronized
     fun deleteAll() {
         writableDatabase.beginTransaction()
         try {
-            listOf("baseline", "usage_delta", "usage_snapshot", "hotspot_session", "alert_event", "app_identity", "data_plan", "settings")
-                .forEach { writableDatabase.delete(it, null, null) }
+            clearTables(writableDatabase)
             writableDatabase.setTransactionSuccessful()
         } finally { writableDatabase.endTransaction() }
     }
+
+    private fun csvField(value: String): String =
+        if (value.any { it == ',' || it == '"' || it == '\n' || it == '\r' })
+            "\"${value.replace("\"", "\"\"")}\"" else value
+
+    private enum class ValueType { INTEGER, REAL, TEXT }
 
     data class Snapshot(
         val capturedAt: Long, val monotonic: Long, val bootId: String,
@@ -564,7 +727,7 @@ class UsageDatabase(context: Context) :
 
     data class IntelligenceCandidate(
         val appId: Long, val label: String, val network: String,
-        val actualBytes: Long, val backgroundBytes: Long,
+        val actualBytes: Long, val backgroundBytes: Long, val excludedFromAlerts: Boolean,
     )
 
     private fun android.database.Cursor.nullableString(index: Int): String? =
@@ -576,6 +739,56 @@ class UsageDatabase(context: Context) :
 
     companion object {
         const val TETHERING_PLATFORM_KEY = "android:tethering"
-        private const val VERSION = 3
+        private const val VERSION = 4
+        private const val BACKUP_FORMAT = "io.andura.datalens.backup"
+        private const val BACKUP_VERSION = 1
+
+        private val backupSchemas = linkedMapOf(
+            "app_identity" to linkedMapOf(
+                "id" to ValueType.INTEGER, "platform_key" to ValueType.TEXT,
+                "package_or_bundle_id" to ValueType.TEXT, "label_snapshot" to ValueType.TEXT,
+                "first_seen_at" to ValueType.INTEGER, "last_seen_at" to ValueType.INTEGER,
+                "excluded_from_alerts" to ValueType.INTEGER,
+            ),
+            "usage_snapshot" to linkedMapOf(
+                "id" to ValueType.INTEGER, "captured_at_utc" to ValueType.INTEGER,
+                "monotonic_marker" to ValueType.INTEGER, "boot_id" to ValueType.TEXT,
+                "network_type" to ValueType.TEXT, "rx_total" to ValueType.INTEGER,
+                "tx_total" to ValueType.INTEGER, "source" to ValueType.TEXT,
+                "quality" to ValueType.TEXT,
+            ),
+            "usage_delta" to linkedMapOf(
+                "id" to ValueType.INTEGER, "interval_start_utc" to ValueType.INTEGER,
+                "interval_end_utc" to ValueType.INTEGER, "app_identity_id" to ValueType.INTEGER,
+                "network_type" to ValueType.TEXT, "foreground_state" to ValueType.TEXT,
+                "rx_bytes" to ValueType.INTEGER, "tx_bytes" to ValueType.INTEGER,
+                "quality" to ValueType.TEXT, "dedupe_key" to ValueType.TEXT,
+            ),
+            "data_plan" to linkedMapOf(
+                "id" to ValueType.INTEGER, "cap_bytes" to ValueType.INTEGER,
+                "cycle_day" to ValueType.INTEGER, "enabled" to ValueType.INTEGER,
+            ),
+            "alert_event" to linkedMapOf(
+                "id" to ValueType.INTEGER, "type" to ValueType.TEXT,
+                "window_start" to ValueType.INTEGER, "window_end" to ValueType.INTEGER,
+                "app_identity_id" to ValueType.INTEGER, "actual_bytes" to ValueType.INTEGER,
+                "baseline_bytes" to ValueType.INTEGER, "ratio" to ValueType.REAL,
+                "network_type" to ValueType.TEXT, "foreground_state" to ValueType.TEXT,
+                "state" to ValueType.TEXT, "dedupe_key" to ValueType.TEXT,
+                "created_at" to ValueType.INTEGER,
+            ),
+            "baseline" to linkedMapOf(
+                "app_identity_id" to ValueType.INTEGER, "granularity" to ValueType.TEXT,
+                "network_type" to ValueType.TEXT, "sample_count" to ValueType.INTEGER,
+                "center" to ValueType.REAL, "dispersion" to ValueType.REAL,
+                "updated_at" to ValueType.INTEGER,
+            ),
+            "settings" to linkedMapOf("key" to ValueType.TEXT, "value" to ValueType.TEXT),
+            "hotspot_session" to linkedMapOf(
+                "id" to ValueType.INTEGER, "started_at_utc" to ValueType.INTEGER,
+                "ended_at_utc" to ValueType.INTEGER, "detection_quality" to ValueType.TEXT,
+                "open_marker" to ValueType.INTEGER,
+            ),
+        )
     }
 }

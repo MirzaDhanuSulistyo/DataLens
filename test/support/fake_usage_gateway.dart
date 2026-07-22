@@ -38,6 +38,17 @@ class FakeUsageGateway implements UsageGateway {
   AlertPreferences alertPreferences = const AlertPreferences();
   WidgetPreferences widgetPreferences = const WidgetPreferences();
   int retentionDays = 365;
+  DeviceGuidance deviceGuidance = const DeviceGuidance(
+    manufacturer: 'Google',
+    model: 'Pixel Test',
+    androidVersion: '15',
+    title: 'Pixel background setup',
+    steps: ['Allow background battery use for reliable monitoring.'],
+    optimizationExempt: false,
+  );
+  bool csvExported = false;
+  bool backupCreated = false;
+  bool backupRestored = false;
   String? initialDestinationValue;
   final destinationController = StreamController<String>.broadcast();
 
@@ -94,6 +105,9 @@ class FakeUsageGateway implements UsageGateway {
   Future<int> getRetentionDays() async => retentionDays;
 
   @override
+  Future<DeviceGuidance> getDeviceGuidance() async => deviceGuidance;
+
+  @override
   Future<HotspotUsage> hotspotUsage(
     DateTime start,
     DateTime end, {
@@ -108,6 +122,9 @@ class FakeUsageGateway implements UsageGateway {
 
   @override
   Future<void> openOverlaySettings() async {}
+
+  @override
+  Future<void> openBatterySettings() async {}
 
   @override
   Future<void> openUsageAccessSettings() async {}
@@ -134,6 +151,36 @@ class FakeUsageGateway implements UsageGateway {
 
   @override
   Future<void> saveRetentionDays(int days) async => retentionDays = days;
+
+  @override
+  Future<void> setAppExcluded(int appId, bool excluded) async {
+    appRecords = [
+      for (final app in appRecords)
+        if (app.id == appId)
+          AppUsageRecord(
+            id: app.id,
+            label: app.label,
+            packageName: app.packageName,
+            rxBytes: app.rxBytes,
+            txBytes: app.txBytes,
+            foregroundState: app.foregroundState,
+            baselineSampleCount: app.baselineSampleCount,
+            baselineBytes: app.baselineBytes,
+            excludedFromAlerts: excluded,
+          )
+        else
+          app,
+    ];
+  }
+
+  @override
+  Future<bool> exportCsv() async => csvExported = true;
+
+  @override
+  Future<bool> createBackup() async => backupCreated = true;
+
+  @override
+  Future<bool> restoreBackup() async => backupRestored = true;
 
   @override
   Future<bool> setOverlayEnabled(bool enabled) async => enabled;

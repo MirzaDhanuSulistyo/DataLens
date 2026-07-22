@@ -139,7 +139,8 @@ class UsageCollector(private val context: Context) {
         val zone = ZoneId.systemDefault()
         val today = LocalDate.now(zone)
         database.intelligenceCandidates(dayStart, now).forEach { candidate ->
-            if (newAppEnabled && candidate.appId in newApps && candidate.actualBytes >= NEW_APP_FLOOR_BYTES) {
+            if (!candidate.excludedFromAlerts && newAppEnabled && candidate.appId in newApps &&
+                candidate.actualBytes >= NEW_APP_FLOOR_BYTES) {
                 if (database.insertIntelligenceAlert(
                     "new_app", candidate.appId, dayStart, now, candidate.actualBytes,
                     null, null, candidate.network, "unknown",
@@ -173,7 +174,7 @@ class UsageCollector(private val context: Context) {
             val comparison = max(center, 1_000_000.0)
             val ratio = candidate.actualBytes / comparison
             val robustUpper = center + policy.dispersionMultiplier * 1.4826 * dispersion
-            if (anomalyEnabled && candidate.actualBytes >= policy.minimumBytes &&
+            if (!candidate.excludedFromAlerts && anomalyEnabled && candidate.actualBytes >= policy.minimumBytes &&
                 ratio >= policy.ratio && candidate.actualBytes >= robustUpper) {
                 if (database.insertIntelligenceAlert(
                     "anomaly_daily", candidate.appId, dayStart, now, candidate.actualBytes,
@@ -185,7 +186,8 @@ class UsageCollector(private val context: Context) {
                     "anomaly:${candidate.appId}:${candidate.network}:$dayStart",
                 )
             }
-            if (backgroundEnabled && candidate.backgroundBytes >= policy.minimumBytes &&
+            if (!candidate.excludedFromAlerts && backgroundEnabled &&
+                candidate.backgroundBytes >= policy.minimumBytes &&
                 candidate.backgroundBytes * 2 >= candidate.actualBytes) {
                 if (database.insertIntelligenceAlert(
                     "background_usage", candidate.appId, dayStart, now,

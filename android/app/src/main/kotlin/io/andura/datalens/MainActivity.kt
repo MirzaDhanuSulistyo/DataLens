@@ -1,10 +1,12 @@
 package io.andura.datalens
 
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -16,6 +18,8 @@ import io.andura.datalens.widget.DataLensWidgetProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.time.LocalDate
+import java.util.Locale
 import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
@@ -26,6 +30,7 @@ class MainActivity : FlutterActivity() {
     private var notificationResult: MethodChannel.Result? = null
     private lateinit var methodChannel: MethodChannel
     private var pendingDestination: String? = null
+    private var documentResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -109,6 +114,13 @@ class MainActivity : FlutterActivity() {
                 }
                 "getPlan" -> result.success(database.plan())
                 "getAlerts" -> result.success(database.alerts())
+                "setAppExcluded" -> {
+                    database.setAppExcluded(
+                        call.argument<Number>("appId")!!.toLong(),
+                        call.argument<Boolean>("excluded") ?: false,
+                    )
+                    result.success(true)
+                }
                 "getAlertPreferences" -> result.success(mapOf(
                     "sensitivity" to (database.setting("alert_sensitivity") ?: "medium"),
                     "anomalyAlerts" to (database.setting("alert_anomaly") != "false"),
@@ -141,12 +153,67 @@ class MainActivity : FlutterActivity() {
                     DataLensWidgetProvider.updateAll(this)
                     result.success(true)
                 }
+                "getDeviceGuidance" -> result.success(deviceGuidance())
+                "openBatterySettings" -> {
+                    openBatterySettings()
+                    result.success(true)
+                }
+                "exportCsv" -> createDocument(
+                    result,
+                    REQUEST_EXPORT_CSV,
+                    "text/csv",
+                    "datalens-usage-${LocalDate.now()}.csv",
+                )
+                "createBackup" -> createDocument(
+                    result,
+                    REQUEST_CREATE_BACKUP,
+                    "application/json",
+                    "datalens-backup-${LocalDate.now()}.json",
+                )
+                "restoreBackup" -> openBackup(result)
                 "deleteAllData" -> {
                     database.deleteAll()
                     DataLensWidgetProvider.updateAll(this)
                     result.success(true)
                 }
                 else -> result.notImplemented()
+            }
+        }
+    }
+
+    @Deprecated("Deprecated in Android; required by FlutterActivity's document picker bridge")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode !in setOf(REQUEST_EXPORT_CSV, REQUEST_CREATE_BACKUP, REQUEST_RESTORE_BACKUP)) return
+        val pending = documentResult ?: return
+        documentResult = null
+        val uri = data?.data
+        if (resultCode != Activity.RESULT_OK || uri == null) {
+            pending.success(false)
+            return
+        }
+        if (requestCode == REQUEST_RESTORE_BACKUP) MonitoringService.stop(this)
+        executor.execute {
+            try {
+                when (requestCode) {
+                    REQUEST_EXPORT_CSV -> contentResolver.openOutputStream(uri, "wt")!!.use(database::writeCsv)
+                    REQUEST_CREATE_BACKUP -> contentResolver.openOutputStream(uri, "wt")!!.use(database::writeBackup)
+                    REQUEST_RESTORE_BACKUP -> contentResolver.openInputStream(uri)!!.use(database::restoreBackup)
+                }
+                runOnUiThread {
+                    DataLensWidgetProvider.updateAll(this)
+                    if (requestCode == REQUEST_RESTORE_BACKUP && database.setting("monitoring_enabled") == "true") {
+                        MonitoringService.start(this)
+                    }
+                    pending.success(true)
+                }
+            } catch (error: Exception) {
+                runOnUiThread {
+                    if (requestCode == REQUEST_RESTORE_BACKUP && database.setting("monitoring_enabled") == "true") {
+                        MonitoringService.start(this)
+                    }
+                    pending.error("document_error", error.message ?: "Document operation failed", null)
+                }
             }
         }
     }
@@ -173,6 +240,101 @@ class MainActivity : FlutterActivity() {
         if (::hotspotStateMonitor.isInitialized) hotspotStateMonitor.stop()
         executor.shutdown()
         super.onDestroy()
+    }
+
+    private fun createDocument(
+        result: MethodChannel.Result,
+        requestCode: Int,
+        mimeType: String,
+        fileName: String,
+    ) {
+        if (documentResult != null) {
+            result.error("request_in_progress", "A document picker is already open", null)
+            return
+        }
+        documentResult = result
+        try {
+            startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = mimeType
+                putExtra(Intent.EXTRA_TITLE, fileName)
+            }, requestCode)
+        } catch (error: Exception) {
+            documentResult = null
+            result.error("document_picker_unavailable", error.message, null)
+        }
+    }
+
+    private fun openBackup(result: MethodChannel.Result) {
+        if (documentResult != null) {
+            result.error("request_in_progress", "A document picker is already open", null)
+            return
+        }
+        documentResult = result
+        try {
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "application/json"
+            }, REQUEST_RESTORE_BACKUP)
+        } catch (error: Exception) {
+            documentResult = null
+            result.error("document_picker_unavailable", error.message, null)
+        }
+    }
+
+    private fun deviceGuidance(): Map<String, Any> {
+        val manufacturer = Build.MANUFACTURER.replaceFirstChar {
+            if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString()
+        }
+        val brand = Build.MANUFACTURER.lowercase(Locale.ROOT)
+        val (title, steps) = when {
+            brand.contains("samsung") -> "Samsung background setup" to listOf(
+                "Set DataLens battery usage to Unrestricted in App info → Battery.",
+                "Remove DataLens from Sleeping apps and Deep sleeping apps.",
+                "Allow the persistent monitoring notification to remain visible.",
+            )
+            brand.contains("xiaomi") || brand.contains("redmi") || brand.contains("poco") ->
+                "Xiaomi background setup" to listOf(
+                    "Set Battery saver for DataLens to No restrictions.",
+                    "Enable Autostart for DataLens in system settings.",
+                    "Lock DataLens in Recents if monitoring is stopped by the device.",
+                )
+            brand.contains("huawei") || brand.contains("honor") -> "Huawei background setup" to listOf(
+                "Open App launch, disable automatic management, and allow all three manual options.",
+                "Exclude DataLens from battery optimization.",
+            )
+            brand.contains("oneplus") || brand.contains("oppo") || brand.contains("realme") ->
+                "${manufacturer} background setup" to listOf(
+                    "Allow background activity and set battery use to Unrestricted.",
+                    "Enable Auto launch when that option is available.",
+                )
+            brand.contains("vivo") || brand.contains("iqoo") -> "Vivo background setup" to listOf(
+                "Enable Autostart and high background power consumption for DataLens.",
+                "Exclude DataLens from battery optimization.",
+            )
+            else -> "Android background setup" to listOf(
+                "Allow background battery use for DataLens.",
+                "If samples become stale, exclude DataLens from battery optimization.",
+            )
+        }
+        val power = getSystemService(PowerManager::class.java)
+        return mapOf(
+            "manufacturer" to manufacturer,
+            "model" to Build.MODEL,
+            "androidVersion" to Build.VERSION.RELEASE,
+            "title" to title,
+            "steps" to steps,
+            "optimizationExempt" to power.isIgnoringBatteryOptimizations(packageName),
+        )
+    }
+
+    private fun openBatterySettings() {
+        val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+        try {
+            startActivity(intent)
+        } catch (_: Exception) {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+        }
     }
 
     private fun destinationFromIntent(value: Intent?): String? {
@@ -237,5 +399,8 @@ class MainActivity : FlutterActivity() {
         const val EXTRA_DESTINATION = "io.andura.datalens.DESTINATION"
         private const val CHANNEL = "io.andura.datalens/usage"
         private const val NOTIFICATION_REQUEST = 4103
+        private const val REQUEST_EXPORT_CSV = 4104
+        private const val REQUEST_CREATE_BACKUP = 4105
+        private const val REQUEST_RESTORE_BACKUP = 4106
     }
 }
