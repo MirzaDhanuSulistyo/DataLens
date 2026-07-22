@@ -23,6 +23,7 @@ class MonitoringService : Service() {
     private lateinit var collector: UsageCollector
     private lateinit var database: UsageDatabase
     private lateinit var hotspotStateMonitor: HotspotStateMonitor
+    private lateinit var speedOverlay: SpeedOverlay
     private var lastRx = 0L
     private var lastTx = 0L
     private var lastElapsed = 0L
@@ -43,6 +44,10 @@ class MonitoringService : Service() {
                 lastPersisted = elapsed
             }
             notificationManager().notify(NOTIFICATION_ID, notification(down, up))
+            speedOverlay.update(
+                formatRate(down), formatRate(up),
+                database.setting("overlay_enabled") == "true",
+            )
             handler.postDelayed(this, LIVE_INTERVAL_MS)
         }
     }
@@ -52,6 +57,7 @@ class MonitoringService : Service() {
         collector = UsageCollector(this)
         database = UsageDatabase(this)
         hotspotStateMonitor = HotspotStateMonitor(this).also { it.start() }
+        speedOverlay = SpeedOverlay(this) {}
         notificationManager().createNotificationChannel(NotificationChannel(
             CHANNEL_ID, "Data usage monitoring", NotificationManager.IMPORTANCE_LOW,
         ).apply { description = "Shows live transfer speed while monitoring is enabled" })
@@ -75,6 +81,7 @@ class MonitoringService : Service() {
     override fun onDestroy() {
         handler.removeCallbacks(tick)
         hotspotStateMonitor.stop()
+        speedOverlay.hide()
         super.onDestroy()
     }
 

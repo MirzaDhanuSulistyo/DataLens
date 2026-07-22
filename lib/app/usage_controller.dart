@@ -17,6 +17,7 @@ class UsageController extends ChangeNotifier {
   List<AlertRecord> alerts = const [];
   HotspotUsage hotspot = const HotspotUsage();
   DataPlan? plan;
+  AlertPreferences alertPreferences = const AlertPreferences();
   String network = 'all';
   bool loading = true;
   String? error;
@@ -43,6 +44,7 @@ class UsageController extends ChangeNotifier {
     try {
       capabilities = await gateway.status();
       plan = await gateway.getPlan();
+      alertPreferences = await gateway.getAlertPreferences();
       final now = DateTime.now();
       final startToday = DateTime(now.year, now.month, now.day);
       final currentHour = DateTime(now.year, now.month, now.day, now.hour);
@@ -127,6 +129,21 @@ class UsageController extends ChangeNotifier {
     await gateway.savePlan(value);
     plan = value;
     await refreshData();
+  }
+
+  Future<void> updateAlertPreferences(AlertPreferences value) async {
+    alertPreferences = value;
+    notifyListeners();
+    await gateway.saveAlertPreferences(value);
+  }
+
+  Future<void> openOverlaySettings() => gateway.openOverlaySettings();
+
+  Future<void> setOverlayEnabled(bool enabled) async {
+    final applied = await gateway.setOverlayEnabled(enabled);
+    capabilities = await gateway.status();
+    notifyListeners();
+    if (enabled && !applied) await gateway.openOverlaySettings();
   }
 
   Future<void> deleteAllData() async {

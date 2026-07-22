@@ -1274,6 +1274,13 @@ class _AppsScreenState extends State<_AppsScreen> {
                 'Activity state: ${app.foregroundState}',
                 style: TextStyle(color: tokens.muted),
               ),
+              SizedBox(height: tokens.space2),
+              Text(
+                app.baselineMature
+                    ? 'Usual daily usage: ${formatBytes(app.baselineBytes ?? 0)} · ${app.baselineSampleCount} complete days learned'
+                    : 'Baseline learning: ${app.baselineSampleCount} of 7 complete days',
+                style: TextStyle(color: tokens.muted),
+              ),
             ],
           ),
         );
@@ -1458,7 +1465,7 @@ class _AlertsScreen extends StatelessWidget {
         ),
         SizedBox(height: tokens.space2),
         Text(
-          'Deduplicated data-plan notifications',
+          'Plan, unusual usage, new-app, and background signals',
           style: Theme.of(
             context,
           ).textTheme.bodyMedium?.copyWith(color: tokens.muted),
@@ -1474,14 +1481,9 @@ class _AlertsScreen extends StatelessWidget {
         else
           for (final alert in controller.alerts) ...[
             AnduraAlert(
-              title: alert.type == 'plan_100'
-                  ? 'Data plan reached'
-                  : 'Data plan at 80%',
-              message:
-                  '${formatBytes(alert.actualBytes)} used in this billing cycle.',
-              intent: alert.type == 'plan_100'
-                  ? AnduraIntent.danger
-                  : AnduraIntent.warning,
+              title: _alertTitle(alert),
+              message: _alertMessage(alert),
+              intent: _alertIntent(alert),
             ),
             SizedBox(height: tokens.space3),
           ],
@@ -1489,6 +1491,36 @@ class _AlertsScreen extends StatelessWidget {
     );
   }
 }
+
+String _alertTitle(AlertRecord alert) => switch (alert.type) {
+  'plan_100' => 'Data plan reached',
+  'plan_80' => 'Data plan at 80%',
+  'new_app' => 'New app using data',
+  'anomaly_daily' => 'Unusual data usage',
+  'background_usage' => 'Background data usage',
+  _ => 'Usage alert',
+};
+
+String _alertMessage(AlertRecord alert) {
+  if (alert.type.startsWith('plan_')) {
+    return '${formatBytes(alert.actualBytes)} used in this billing cycle.';
+  }
+  final app = alert.appLabel ?? 'An app';
+  final network = alert.networkType == null ? '' : ' on ${alert.networkType}';
+  final comparison = alert.ratio == null
+      ? ''
+      : ' — ${alert.ratio!.toStringAsFixed(1)}× its usual rate';
+  final state = alert.type == 'background_usage'
+      ? ' while Android reported it in the background'
+      : '';
+  return '$app used ${formatBytes(alert.actualBytes)}$network$state$comparison.';
+}
+
+AnduraIntent _alertIntent(AlertRecord alert) => switch (alert.type) {
+  'plan_100' || 'anomaly_daily' => AnduraIntent.danger,
+  'plan_80' || 'background_usage' => AnduraIntent.warning,
+  _ => AnduraIntent.info,
+};
 
 class _SettingsScreen extends StatelessWidget {
   const _SettingsScreen({required this.controller});
@@ -1566,6 +1598,101 @@ class _SettingsScreen extends StatelessWidget {
             onPressed: controller.reconcile,
           ),
         SizedBox(height: tokens.space6),
+        const AnduraSectionHeader(title: 'Usage intelligence'),
+        SizedBox(height: tokens.space3),
+        AnduraCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Alert sensitivity',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              SizedBox(height: tokens.space3),
+              Wrap(
+                spacing: tokens.space2,
+                runSpacing: tokens.space2,
+                children: [
+                  for (final value in const ['off', 'low', 'medium', 'high'])
+                    AnduraChip(
+                      label: '${value[0].toUpperCase()}${value.substring(1)}',
+                      selected:
+                          controller.alertPreferences.sensitivity == value,
+                      onSelected: (_) => controller.updateAlertPreferences(
+                        controller.alertPreferences.copyWith(
+                          sensitivity: value,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              SizedBox(height: tokens.space3),
+              Text(
+                'Baselines learn locally after 7 complete days and use robust per-app comparisons.',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: tokens.muted),
+              ),
+              const AnduraDivider(),
+              AnduraSwitch(
+                label: 'Unusual usage alerts',
+                subtitle: 'Ratio and minimum-byte thresholds',
+                value: controller.alertPreferences.anomalyAlerts,
+                onChanged: (value) => controller.updateAlertPreferences(
+                  controller.alertPreferences.copyWith(anomalyAlerts: value),
+                ),
+              ),
+              const AnduraDivider(),
+              AnduraSwitch(
+                label: 'New-app traffic alerts',
+                subtitle:
+                    'Once when a newly seen app first uses meaningful data',
+                value: controller.alertPreferences.newAppAlerts,
+                onChanged: (value) => controller.updateAlertPreferences(
+                  controller.alertPreferences.copyWith(newAppAlerts: value),
+                ),
+              ),
+              const AnduraDivider(),
+              AnduraSwitch(
+                label: 'Background usage alerts',
+                subtitle: 'Only when Android reports a background state',
+                value: controller.alertPreferences.backgroundAlerts,
+                onChanged: (value) => controller.updateAlertPreferences(
+                  controller.alertPreferences.copyWith(backgroundAlerts: value),
+                ),
+              ),
+            ],
+          ),
+        ),
+        SizedBox(height: tokens.space6),
+        const AnduraSectionHeader(title: 'Live speed overlay'),
+        SizedBox(height: tokens.space3),
+        AnduraCard(
+          child: Column(
+            children: [
+              AnduraSwitch(
+                label: 'Floating speed bubble',
+                subtitle: capability.overlayPermission
+                    ? 'Draggable and dismissible; monitoring must be active'
+                    : 'Requires Android display-over-other-apps permission',
+                value: capability.overlayEnabled,
+                enabled: capability.platform == 'android',
+                onChanged: controller.setOverlayEnabled,
+              ),
+              if (!capability.overlayPermission) ...[
+                const AnduraDivider(),
+                AnduraButton(
+                  label: 'Grant overlay permission',
+                  icon: Icons.open_in_new,
+                  onPressed: controller.openOverlaySettings,
+                ),
+              ],
+            ],
+          ),
+        ),
+        SizedBox(height: tokens.space6),
         const AnduraSectionHeader(title: 'Plan and privacy'),
         SizedBox(height: tokens.space3),
         AnduraSettingsTile(
@@ -1593,7 +1720,7 @@ class _SettingsScreen extends StatelessWidget {
         ),
         SizedBox(height: tokens.space3),
         Text(
-          'Android foundation · Phase 2',
+          'Android intelligence · Phase 3',
           textAlign: TextAlign.center,
           style: Theme.of(
             context,

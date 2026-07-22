@@ -8,6 +8,8 @@ class CapabilityStatus {
     required this.monitoring,
     this.latestSampleAt,
     this.latestQuality,
+    this.overlayPermission = false,
+    this.overlayEnabled = false,
   });
 
   const CapabilityStatus.unsupported()
@@ -16,7 +18,9 @@ class CapabilityStatus {
       notifications = false,
       monitoring = false,
       latestSampleAt = null,
-      latestQuality = null;
+      latestQuality = null,
+      overlayPermission = false,
+      overlayEnabled = false;
 
   final String platform;
   final bool usageAccess;
@@ -24,6 +28,8 @@ class CapabilityStatus {
   final bool monitoring;
   final DateTime? latestSampleAt;
   final String? latestQuality;
+  final bool overlayPermission;
+  final bool overlayEnabled;
 
   factory CapabilityStatus.fromMap(Map<Object?, Object?> map) =>
       CapabilityStatus(
@@ -36,6 +42,8 @@ class CapabilityStatus {
           _ => null,
         },
         latestQuality: map['latestQuality'] as String?,
+        overlayPermission: map['overlayPermission'] as bool? ?? false,
+        overlayEnabled: map['overlayEnabled'] as bool? ?? false,
       );
 }
 
@@ -79,6 +87,8 @@ class AppUsageRecord {
     required this.txBytes,
     required this.foregroundState,
     this.packageName,
+    this.baselineSampleCount = 0,
+    this.baselineBytes,
   });
   final int id;
   final String label;
@@ -86,7 +96,10 @@ class AppUsageRecord {
   final int rxBytes;
   final int txBytes;
   final String foregroundState;
+  final int baselineSampleCount;
+  final int? baselineBytes;
   int get totalBytes => rxBytes + txBytes;
+  bool get baselineMature => baselineSampleCount >= 7;
 
   factory AppUsageRecord.fromMap(Map<Object?, Object?> map) => AppUsageRecord(
     id: (map['id'] as num).toInt(),
@@ -95,6 +108,8 @@ class AppUsageRecord {
     rxBytes: (map['rxBytes'] as num).toInt(),
     txBytes: (map['txBytes'] as num).toInt(),
     foregroundState: map['foregroundState'] as String? ?? 'unknown',
+    baselineSampleCount: (map['baselineSampleCount'] as num?)?.toInt() ?? 0,
+    baselineBytes: (map['baselineBytes'] as num?)?.toInt(),
   );
 }
 
@@ -194,12 +209,22 @@ class AlertRecord {
     required this.actualBytes,
     required this.state,
     required this.createdAt,
+    this.appLabel,
+    this.baselineBytes,
+    this.ratio,
+    this.networkType,
+    this.foregroundState,
   });
   final int id;
   final String type;
   final int actualBytes;
   final String state;
   final DateTime createdAt;
+  final String? appLabel;
+  final int? baselineBytes;
+  final double? ratio;
+  final String? networkType;
+  final String? foregroundState;
 
   factory AlertRecord.fromMap(Map<Object?, Object?> map) => AlertRecord(
     id: (map['id'] as num).toInt(),
@@ -209,12 +234,53 @@ class AlertRecord {
     createdAt: DateTime.fromMillisecondsSinceEpoch(
       (map['createdAt'] as num).toInt(),
     ),
+    appLabel: map['appLabel'] as String?,
+    baselineBytes: (map['baselineBytes'] as num?)?.toInt(),
+    ratio: (map['ratio'] as num?)?.toDouble(),
+    networkType: map['networkType'] as String?,
+    foregroundState: map['foregroundState'] as String?,
   );
+}
+
+class AlertPreferences {
+  const AlertPreferences({
+    this.sensitivity = 'medium',
+    this.anomalyAlerts = true,
+    this.newAppAlerts = true,
+    this.backgroundAlerts = true,
+  });
+
+  final String sensitivity;
+  final bool anomalyAlerts;
+  final bool newAppAlerts;
+  final bool backgroundAlerts;
+
+  AlertPreferences copyWith({
+    String? sensitivity,
+    bool? anomalyAlerts,
+    bool? newAppAlerts,
+    bool? backgroundAlerts,
+  }) => AlertPreferences(
+    sensitivity: sensitivity ?? this.sensitivity,
+    anomalyAlerts: anomalyAlerts ?? this.anomalyAlerts,
+    newAppAlerts: newAppAlerts ?? this.newAppAlerts,
+    backgroundAlerts: backgroundAlerts ?? this.backgroundAlerts,
+  );
+
+  factory AlertPreferences.fromMap(Map<Object?, Object?> map) =>
+      AlertPreferences(
+        sensitivity: map['sensitivity'] as String? ?? 'medium',
+        anomalyAlerts: map['anomalyAlerts'] as bool? ?? true,
+        newAppAlerts: map['newAppAlerts'] as bool? ?? true,
+        backgroundAlerts: map['backgroundAlerts'] as bool? ?? true,
+      );
 }
 
 abstract interface class UsageGateway {
   Future<CapabilityStatus> status();
   Future<void> openUsageAccessSettings();
+  Future<void> openOverlaySettings();
+  Future<bool> setOverlayEnabled(bool enabled);
   Future<bool> requestNotificationPermission();
   Future<void> startMonitoring();
   Future<void> stopMonitoring();
@@ -249,6 +315,8 @@ abstract interface class UsageGateway {
   Future<DataPlan?> getPlan();
   Future<void> savePlan(DataPlan plan);
   Future<List<AlertRecord>> alerts();
+  Future<AlertPreferences> getAlertPreferences();
+  Future<void> saveAlertPreferences(AlertPreferences preferences);
   Future<void> deleteAllData();
 }
 
@@ -274,6 +342,18 @@ class MethodChannelUsageGateway implements UsageGateway {
   @override
   Future<void> openUsageAccessSettings() =>
       _safe(() => _channel.invokeMethod<void>('openUsageAccessSettings'), null);
+
+  @override
+  Future<void> openOverlaySettings() =>
+      _safe(() => _channel.invokeMethod<void>('openOverlaySettings'), null);
+
+  @override
+  Future<bool> setOverlayEnabled(bool enabled) => _safe(
+    () async =>
+        await _channel.invokeMethod<bool>('setOverlayEnabled', enabled) ??
+        false,
+    false,
+  );
 
   @override
   Future<bool> requestNotificationPermission() => _safe(
@@ -413,6 +493,25 @@ class MethodChannelUsageGateway implements UsageGateway {
         .map((value) => AlertRecord.fromMap(value! as Map<Object?, Object?>))
         .toList();
   }, const []);
+
+  @override
+  Future<AlertPreferences> getAlertPreferences() => _safe(() async {
+    final value = await _channel.invokeMapMethod<Object?, Object?>(
+      'getAlertPreferences',
+    );
+    return AlertPreferences.fromMap(value ?? const {});
+  }, const AlertPreferences());
+
+  @override
+  Future<void> saveAlertPreferences(AlertPreferences preferences) => _safe(
+    () => _channel.invokeMethod<void>('saveAlertPreferences', {
+      'sensitivity': preferences.sensitivity,
+      'anomalyAlerts': preferences.anomalyAlerts,
+      'newAppAlerts': preferences.newAppAlerts,
+      'backgroundAlerts': preferences.backgroundAlerts,
+    }),
+    null,
+  );
 
   @override
   Future<void> deleteAllData() =>

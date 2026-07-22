@@ -65,12 +65,20 @@ class UsageDatabase(context: Context) :
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 type TEXT NOT NULL,
                 window_start INTEGER NOT NULL,
+                window_end INTEGER,
+                app_identity_id INTEGER,
                 actual_bytes INTEGER NOT NULL,
+                baseline_bytes INTEGER,
+                ratio REAL,
+                network_type TEXT,
+                foreground_state TEXT,
                 state TEXT NOT NULL DEFAULT 'unread',
                 dedupe_key TEXT NOT NULL UNIQUE,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY(app_identity_id) REFERENCES app_identity(id)
             )"""
         )
+        createBaselineTable(db)
         db.execSQL("CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         createHotspotSessionTable(db)
         db.execSQL("CREATE INDEX delta_time_idx ON usage_delta(interval_end_utc)")
@@ -79,6 +87,31 @@ class UsageDatabase(context: Context) :
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createHotspotSessionTable(db)
+        if (oldVersion < 3) {
+            db.execSQL("ALTER TABLE alert_event ADD COLUMN window_end INTEGER")
+            db.execSQL("ALTER TABLE alert_event ADD COLUMN app_identity_id INTEGER REFERENCES app_identity(id)")
+            db.execSQL("ALTER TABLE alert_event ADD COLUMN baseline_bytes INTEGER")
+            db.execSQL("ALTER TABLE alert_event ADD COLUMN ratio REAL")
+            db.execSQL("ALTER TABLE alert_event ADD COLUMN network_type TEXT")
+            db.execSQL("ALTER TABLE alert_event ADD COLUMN foreground_state TEXT")
+            createBaselineTable(db)
+        }
+    }
+
+    private fun createBaselineTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS baseline(
+                app_identity_id INTEGER NOT NULL,
+                granularity TEXT NOT NULL,
+                network_type TEXT NOT NULL,
+                sample_count INTEGER NOT NULL,
+                center REAL NOT NULL,
+                dispersion REAL NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY(app_identity_id, granularity, network_type),
+                FOREIGN KEY(app_identity_id) REFERENCES app_identity(id)
+            )"""
+        )
     }
 
     private fun createHotspotSessionTable(db: SQLiteDatabase) {
@@ -160,17 +193,17 @@ class UsageDatabase(context: Context) :
     }
 
     @Synchronized
-    fun upsertApp(uid: Int, packageName: String?, label: String, now: Long): Long =
+    fun upsertApp(uid: Int, packageName: String?, label: String, now: Long): IdentityResult =
         upsertIdentity("android:$uid:${packageName ?: "unknown"}", packageName, label, now)
 
     @Synchronized
     fun upsertTethering(now: Long): Long =
-        upsertIdentity(TETHERING_PLATFORM_KEY, null, "Hotspot & tethering", now)
+        upsertIdentity(TETHERING_PLATFORM_KEY, null, "Hotspot & tethering", now).id
 
     private fun upsertIdentity(
         platformKey: String, packageName: String?, label: String, now: Long,
-    ): Long {
-        writableDatabase.insertWithOnConflict("app_identity", null, ContentValues().apply {
+    ): IdentityResult {
+        val inserted = writableDatabase.insertWithOnConflict("app_identity", null, ContentValues().apply {
             put("platform_key", platformKey)
             put("package_or_bundle_id", packageName)
             put("label_snapshot", label)
@@ -180,9 +213,10 @@ class UsageDatabase(context: Context) :
         writableDatabase.update("app_identity", ContentValues().apply {
             put("label_snapshot", label); put("last_seen_at", now)
         }, "platform_key = ?", arrayOf(platformKey))
-        return readableDatabase.rawQuery(
+        val id = readableDatabase.rawQuery(
             "SELECT id FROM app_identity WHERE platform_key = ?", arrayOf(platformKey)
         ).use { it.moveToFirst(); it.getLong(0) }
+        return IdentityResult(id, inserted != -1L)
     }
 
     @Synchronized
@@ -252,7 +286,10 @@ class UsageDatabase(context: Context) :
             """SELECT a.id, a.label_snapshot, a.package_or_bundle_id,
                       SUM(d.rx_bytes), SUM(d.tx_bytes),
                       CASE WHEN SUM(CASE WHEN d.foreground_state = 'background' THEN d.rx_bytes + d.tx_bytes ELSE 0 END) > 0
-                           THEN 'background activity' ELSE 'state unavailable' END
+                           THEN 'background activity' ELSE 'state unavailable' END,
+                      COALESCE((SELECT MAX(b.sample_count) FROM baseline b
+                          WHERE b.app_identity_id = a.id), 0),
+                      (SELECT SUM(b.center) FROM baseline b WHERE b.app_identity_id = a.id)
                FROM usage_delta d JOIN app_identity a ON a.id = d.app_identity_id
                WHERE d.interval_end_utc > ? AND d.interval_start_utc < ?$filter
                AND a.platform_key != '$TETHERING_PLATFORM_KEY'
@@ -264,6 +301,8 @@ class UsageDatabase(context: Context) :
                     "id" to cursor.getLong(0), "label" to cursor.getString(1),
                     "packageName" to cursor.getString(2), "rxBytes" to cursor.getLong(3),
                     "txBytes" to cursor.getLong(4), "foregroundState" to cursor.getString(5),
+                    "baselineSampleCount" to cursor.getInt(6),
+                    "baselineBytes" to cursor.nullableLong(7),
                 ))
             }
         }
@@ -374,12 +413,89 @@ class UsageDatabase(context: Context) :
     ) }
 
     @Synchronized
-    fun alerts(): List<Map<String, Any>> = readableDatabase.rawQuery(
-        "SELECT id, type, actual_bytes, state, created_at FROM alert_event ORDER BY created_at DESC", null
+    fun alerts(): List<Map<String, Any?>> = readableDatabase.rawQuery(
+        """SELECT e.id, e.type, e.actual_bytes, e.state, e.created_at,
+                  a.label_snapshot, e.baseline_bytes, e.ratio, e.network_type,
+                  e.foreground_state
+           FROM alert_event e LEFT JOIN app_identity a ON a.id = e.app_identity_id
+           ORDER BY e.created_at DESC""", null
     ).use { cursor -> buildList { while (cursor.moveToNext()) add(mapOf(
-        "id" to cursor.getLong(0), "type" to cursor.getString(1), "actualBytes" to cursor.getLong(2),
-        "state" to cursor.getString(3), "createdAt" to cursor.getLong(4)
+        "id" to cursor.getLong(0), "type" to cursor.getString(1),
+        "actualBytes" to cursor.getLong(2), "state" to cursor.getString(3),
+        "createdAt" to cursor.getLong(4), "appLabel" to cursor.nullableString(5),
+        "baselineBytes" to cursor.nullableLong(6), "ratio" to cursor.nullableDouble(7),
+        "networkType" to cursor.nullableString(8),
+        "foregroundState" to cursor.nullableString(9),
     )) } }
+
+    @Synchronized
+    fun intelligenceCandidates(start: Long, end: Long): List<IntelligenceCandidate> =
+        readableDatabase.rawQuery(
+            """SELECT d.app_identity_id, a.label_snapshot, d.network_type,
+                      SUM(d.rx_bytes + d.tx_bytes),
+                      SUM(CASE WHEN d.foreground_state = 'background'
+                          THEN d.rx_bytes + d.tx_bytes ELSE 0 END)
+               FROM usage_delta d JOIN app_identity a ON a.id = d.app_identity_id
+               WHERE d.interval_end_utc > ? AND d.interval_start_utc < ?
+               AND a.platform_key != ?
+               GROUP BY d.app_identity_id, d.network_type""",
+            arrayOf(start.toString(), end.toString(), TETHERING_PLATFORM_KEY),
+        ).use { cursor -> buildList { while (cursor.moveToNext()) add(IntelligenceCandidate(
+            appId = cursor.getLong(0), label = cursor.getString(1),
+            network = cursor.getString(2), actualBytes = cursor.getLong(3),
+            backgroundBytes = cursor.getLong(4),
+        )) } }
+
+    @Synchronized
+    fun appFirstSeen(appId: Long): Long = readableDatabase.rawQuery(
+        "SELECT first_seen_at FROM app_identity WHERE id = ?", arrayOf(appId.toString())
+    ).use { if (it.moveToFirst()) it.getLong(0) else Long.MAX_VALUE }
+
+    @Synchronized
+    fun dayIsComplete(start: Long, end: Long): Boolean = readableDatabase.rawQuery(
+        """SELECT MIN(captured_at_utc), MAX(captured_at_utc), COUNT(*)
+           FROM usage_snapshot WHERE captured_at_utc >= ? AND captured_at_utc < ?""",
+        arrayOf(start.toString(), end.toString()),
+    ).use {
+        if (!it.moveToFirst() || it.getLong(2) < 20) false
+        else it.getLong(0) <= start + 2 * 60 * 60 * 1000L &&
+            it.getLong(1) >= end - 2 * 60 * 60 * 1000L
+    }
+
+    @Synchronized
+    fun appTotal(appId: Long, start: Long, end: Long, network: String): Long =
+        readableDatabase.rawQuery(
+            """SELECT COALESCE(SUM(rx_bytes + tx_bytes), 0) FROM usage_delta
+               WHERE app_identity_id = ? AND interval_end_utc > ?
+               AND interval_start_utc < ? AND network_type = ?""",
+            arrayOf(appId.toString(), start.toString(), end.toString(), network),
+        ).use { it.moveToFirst(); it.getLong(0) }
+
+    @Synchronized
+    fun saveBaseline(appId: Long, network: String, samples: Int, center: Double, dispersion: Double, now: Long) {
+        writableDatabase.insertWithOnConflict("baseline", null, ContentValues().apply {
+            put("app_identity_id", appId); put("granularity", "daily")
+            put("network_type", network); put("sample_count", samples)
+            put("center", center); put("dispersion", dispersion); put("updated_at", now)
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    @Synchronized
+    fun insertIntelligenceAlert(
+        type: String, appId: Long, start: Long, end: Long, actualBytes: Long,
+        baselineBytes: Long?, ratio: Double?, network: String, foreground: String,
+    ): Boolean {
+        val key = if (type == "new_app") "$type:$appId" else "$type:$appId:$start:$network"
+        val result = writableDatabase.insertWithOnConflict("alert_event", null, ContentValues().apply {
+            put("type", type); put("window_start", start); put("window_end", end)
+            put("app_identity_id", appId); put("actual_bytes", actualBytes)
+            if (baselineBytes == null) putNull("baseline_bytes") else put("baseline_bytes", baselineBytes)
+            if (ratio == null) putNull("ratio") else put("ratio", ratio)
+            put("network_type", network); put("foreground_state", foreground)
+            put("state", "unread"); put("dedupe_key", key); put("created_at", System.currentTimeMillis())
+        }, SQLiteDatabase.CONFLICT_IGNORE)
+        return result != -1L
+    }
 
     @Synchronized
     fun insertPlanAlert(type: String, cycleStart: Long, actualBytes: Long): Boolean {
@@ -395,7 +511,7 @@ class UsageDatabase(context: Context) :
     fun deleteAll() {
         writableDatabase.beginTransaction()
         try {
-            listOf("usage_delta", "usage_snapshot", "app_identity", "hotspot_session", "alert_event", "data_plan", "settings")
+            listOf("baseline", "usage_delta", "usage_snapshot", "hotspot_session", "alert_event", "app_identity", "data_plan", "settings")
                 .forEach { writableDatabase.delete(it, null, null) }
             writableDatabase.setTransactionSuccessful()
         } finally { writableDatabase.endTransaction() }
@@ -406,8 +522,22 @@ class UsageDatabase(context: Context) :
         val networkType: String, val rxTotal: Long, val txTotal: Long, val quality: String,
     )
 
+    data class IdentityResult(val id: Long, val isNew: Boolean)
+
+    data class IntelligenceCandidate(
+        val appId: Long, val label: String, val network: String,
+        val actualBytes: Long, val backgroundBytes: Long,
+    )
+
+    private fun android.database.Cursor.nullableString(index: Int): String? =
+        if (isNull(index)) null else getString(index)
+    private fun android.database.Cursor.nullableLong(index: Int): Long? =
+        if (isNull(index)) null else getLong(index)
+    private fun android.database.Cursor.nullableDouble(index: Int): Double? =
+        if (isNull(index)) null else getDouble(index)
+
     companion object {
         const val TETHERING_PLATFORM_KEY = "android:tethering"
-        private const val VERSION = 2
+        private const val VERSION = 3
     }
 }

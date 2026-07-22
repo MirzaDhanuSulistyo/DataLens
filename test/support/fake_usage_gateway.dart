@@ -33,6 +33,7 @@ class FakeUsageGateway implements UsageGateway {
     ),
   ];
   bool deleted = false;
+  AlertPreferences alertPreferences = const AlertPreferences();
 
   @override
   Future<List<AlertRecord>> alerts() async => const [];
@@ -82,7 +83,13 @@ class FakeUsageGateway implements UsageGateway {
   }) async => hotspot;
 
   @override
+  Future<AlertPreferences> getAlertPreferences() async => alertPreferences;
+
+  @override
   Future<LiveCounters?> liveCounters() async => null;
+
+  @override
+  Future<void> openOverlaySettings() async {}
 
   @override
   Future<void> openUsageAccessSettings() async {}
@@ -97,7 +104,14 @@ class FakeUsageGateway implements UsageGateway {
   Future<void> sampleNow() async {}
 
   @override
+  Future<void> saveAlertPreferences(AlertPreferences preferences) async =>
+      alertPreferences = preferences;
+
+  @override
   Future<void> savePlan(DataPlan value) async => plan = value;
+
+  @override
+  Future<bool> setOverlayEnabled(bool enabled) async => enabled;
 
   @override
   Future<void> startMonitoring() async {
@@ -106,6 +120,8 @@ class FakeUsageGateway implements UsageGateway {
       usageAccess: capabilityStatus.usageAccess,
       notifications: true,
       monitoring: true,
+      overlayPermission: capabilityStatus.overlayPermission,
+      overlayEnabled: capabilityStatus.overlayEnabled,
     );
   }
 
@@ -119,6 +135,8 @@ class FakeUsageGateway implements UsageGateway {
       usageAccess: capabilityStatus.usageAccess,
       notifications: capabilityStatus.notifications,
       monitoring: false,
+      overlayPermission: capabilityStatus.overlayPermission,
+      overlayEnabled: capabilityStatus.overlayEnabled,
     );
   }
 

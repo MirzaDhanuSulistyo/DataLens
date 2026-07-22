@@ -2,7 +2,7 @@
 
 A privacy-first Flutter data-usage monitor. Android is the primary platform; unsupported iOS counters are never presented as measured data.
 
-## Current milestone: Phase 2 — Android foundation
+## Current milestone: Phase 3 — Android intelligence
 
 Implemented:
 
@@ -15,6 +15,9 @@ Implemented:
 - Device totals, per-app ranking, 24-hour and seven-day history, and live speed UI
 - Aggregate hotspot/tethering totals, sessions, history, and separate category UI
 - Billing-cycle plans with deduplicated 80% and 100% alerts
+- Per-app daily baselines using median/MAD after seven complete learning days
+- Configurable unusual-usage, new-app, and background-usage alerts with deduplication
+- Opt-in draggable/dismissible Android live-speed overlay
 - Monitoring restart after reboot, local delete controls, and capability-aware states
 
 Android totals and OEM behavior still require the physical-device acceptance matrix described in [`PRD.md`](PRD.md). Per-app and tethering results depend on usage access and OEM support. Hotspot traffic is aggregate: Android does not identify apps used on connected devices. DataLens stores counters and app labels only; it does not inspect traffic payloads, URLs, or messages.

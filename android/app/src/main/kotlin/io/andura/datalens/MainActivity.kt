@@ -1,8 +1,11 @@
 package io.andura.datalens
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import io.andura.datalens.tracking.HotspotStateMonitor
@@ -36,6 +39,19 @@ class MainActivity : FlutterActivity() {
                 "getStatus" -> result.success(status())
                 "openUsageAccessSettings" -> {
                     startActivity(UsageCollector.usageSettingsIntent()); result.success(null)
+                }
+                "openOverlaySettings" -> {
+                    startActivity(Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName"),
+                    )); result.success(null)
+                }
+                "setOverlayEnabled" -> {
+                    val enabled = call.arguments as? Boolean ?: false
+                    val applied = !enabled || Settings.canDrawOverlays(this)
+                    database.putSetting("overlay_enabled", (enabled && applied).toString())
+                    if (database.setting("monitoring_enabled") == "true") MonitoringService.start(this)
+                    result.success(applied)
                 }
                 "requestNotificationPermission" -> requestNotificationPermission(result)
                 "startMonitoring" -> {
@@ -81,6 +97,19 @@ class MainActivity : FlutterActivity() {
                 }
                 "getPlan" -> result.success(database.plan())
                 "getAlerts" -> result.success(database.alerts())
+                "getAlertPreferences" -> result.success(mapOf(
+                    "sensitivity" to (database.setting("alert_sensitivity") ?: "medium"),
+                    "anomalyAlerts" to (database.setting("alert_anomaly") != "false"),
+                    "newAppAlerts" to (database.setting("alert_new_app") != "false"),
+                    "backgroundAlerts" to (database.setting("alert_background") != "false"),
+                ))
+                "saveAlertPreferences" -> {
+                    database.putSetting("alert_sensitivity", call.argument<String>("sensitivity") ?: "medium")
+                    database.putSetting("alert_anomaly", (call.argument<Boolean>("anomalyAlerts") ?: true).toString())
+                    database.putSetting("alert_new_app", (call.argument<Boolean>("newAppAlerts") ?: true).toString())
+                    database.putSetting("alert_background", (call.argument<Boolean>("backgroundAlerts") ?: true).toString())
+                    result.success(true)
+                }
                 "deleteAllData" -> { database.deleteAll(); result.success(true) }
                 else -> result.notImplemented()
             }
@@ -109,6 +138,8 @@ class MainActivity : FlutterActivity() {
             "monitoring" to (database.setting("monitoring_enabled") == "true"),
             "latestSampleAt" to latest?.capturedAt,
             "latestQuality" to latest?.quality,
+            "overlayPermission" to Settings.canDrawOverlays(this),
+            "overlayEnabled" to (database.setting("overlay_enabled") == "true" && Settings.canDrawOverlays(this)),
         )
     }
 

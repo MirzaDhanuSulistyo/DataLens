@@ -20,6 +20,8 @@ import java.io.File
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import kotlin.math.abs
+import kotlin.math.max
 
 class UsageCollector(private val context: Context) {
     private val database = UsageDatabase(context)
@@ -56,15 +58,18 @@ class UsageCollector(private val context: Context) {
         val start = LocalDate.now(ZoneId.systemDefault())
             .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
         val manager = context.getSystemService(NetworkStatsManager::class.java)
+        val newApps = mutableSetOf<Long>()
         var count = 0
-        count += queryNetwork(manager, ConnectivityManager.TYPE_WIFI, "wifi", start, now)
-        count += queryNetwork(manager, ConnectivityManager.TYPE_MOBILE, "mobile", start, now)
+        count += queryNetwork(manager, ConnectivityManager.TYPE_WIFI, "wifi", start, now, newApps)
+        count += queryNetwork(manager, ConnectivityManager.TYPE_MOBILE, "mobile", start, now, newApps)
+        evaluateIntelligence(start, now, newApps)
         database.putSetting("last_reconciled_at", now.toString())
         return count
     }
 
     private fun queryNetwork(
         manager: NetworkStatsManager, legacyType: Int, network: String, start: Long, end: Long,
+        newApps: MutableSet<Long>,
     ): Int {
         var stats: NetworkStats? = null
         return try {
@@ -102,8 +107,9 @@ class UsageCollector(private val context: Context) {
                             context.packageManager.getApplicationLabel(info).toString()
                         }.getOrNull()
                     } ?: "UID $uid"
-                    val appId = database.upsertApp(uid, packageName, label, end)
-                    database.insertAppDelta(start, end, appId, uid, network, state, bytes.rx, bytes.tx)
+                    val identity = database.upsertApp(uid, packageName, label, end)
+                    if (identity.isNew) newApps.add(identity.id)
+                    database.insertAppDelta(start, end, identity.id, uid, network, state, bytes.rx, bytes.tx)
                 }
             }
             totals.size
@@ -114,6 +120,112 @@ class UsageCollector(private val context: Context) {
         } finally {
             stats?.close()
         }
+    }
+
+    private fun evaluateIntelligence(dayStart: Long, now: Long, newApps: Set<Long>) {
+        val sensitivity = database.setting("alert_sensitivity") ?: "medium"
+        val anomalyEnabled = database.setting("alert_anomaly") != "false" && sensitivity != "off"
+        val newAppEnabled = database.setting("alert_new_app") != "false"
+        val backgroundEnabled = database.setting("alert_background") != "false"
+        val policy = when (sensitivity) {
+            "low" -> AlertPolicy(3.0, 250_000_000L, 4.0)
+            "high" -> AlertPolicy(2.0, 50_000_000L, 2.0)
+            else -> AlertPolicy(2.5, 100_000_000L, 3.0)
+        }
+        val zone = ZoneId.systemDefault()
+        val today = LocalDate.now(zone)
+        database.intelligenceCandidates(dayStart, now).forEach { candidate ->
+            if (newAppEnabled && candidate.appId in newApps && candidate.actualBytes >= NEW_APP_FLOOR_BYTES) {
+                if (database.insertIntelligenceAlert(
+                    "new_app", candidate.appId, dayStart, now, candidate.actualBytes,
+                    null, null, candidate.network, "unknown",
+                )) notifyIntelligenceAlert(
+                    "New app using data",
+                    "${candidate.label} used ${formatBytes(candidate.actualBytes)} on ${candidate.network}.",
+                    "new_app:${candidate.appId}:${candidate.network}",
+                )
+            }
+
+            val firstSeenDate = Instant.ofEpochMilli(database.appFirstSeen(candidate.appId))
+                .atZone(zone).toLocalDate()
+            val samples = mutableListOf<Long>()
+            for (daysAgo in 14 downTo 1) {
+                val date = today.minusDays(daysAgo.toLong())
+                // The install/first-traffic day is incomplete and cannot train a baseline.
+                if (!date.isAfter(firstSeenDate)) continue
+                val start = date.atStartOfDay(zone).toInstant().toEpochMilli()
+                val end = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+                if (database.dayIsComplete(start, end)) {
+                    samples.add(database.appTotal(candidate.appId, start, end, candidate.network))
+                }
+            }
+            if (samples.isEmpty()) return@forEach
+            val center = median(samples)
+            val dispersion = median(samples.map { abs(it - center.toLong()).toLong() })
+            database.saveBaseline(
+                candidate.appId, candidate.network, samples.size, center, dispersion, now,
+            )
+            if (samples.size < 7) return@forEach
+            val comparison = max(center, 1_000_000.0)
+            val ratio = candidate.actualBytes / comparison
+            val robustUpper = center + policy.dispersionMultiplier * 1.4826 * dispersion
+            if (anomalyEnabled && candidate.actualBytes >= policy.minimumBytes &&
+                ratio >= policy.ratio && candidate.actualBytes >= robustUpper) {
+                if (database.insertIntelligenceAlert(
+                    "anomaly_daily", candidate.appId, dayStart, now, candidate.actualBytes,
+                    center.toLong(), ratio, candidate.network,
+                    if (candidate.backgroundBytes > 0) "background observed" else "unknown",
+                )) notifyIntelligenceAlert(
+                    "Unusual data usage",
+                    "${candidate.label} used ${formatBytes(candidate.actualBytes)} — ${String.format("%.1f", ratio)}× its usual rate.",
+                    "anomaly:${candidate.appId}:${candidate.network}:$dayStart",
+                )
+            }
+            if (backgroundEnabled && candidate.backgroundBytes >= policy.minimumBytes &&
+                candidate.backgroundBytes * 2 >= candidate.actualBytes) {
+                if (database.insertIntelligenceAlert(
+                    "background_usage", candidate.appId, dayStart, now,
+                    candidate.backgroundBytes, center.toLong(),
+                    candidate.backgroundBytes / comparison, candidate.network, "background",
+                )) notifyIntelligenceAlert(
+                    "Background data usage",
+                    "${candidate.label} used ${formatBytes(candidate.backgroundBytes)} in the background.",
+                    "background:${candidate.appId}:${candidate.network}:$dayStart",
+                )
+            }
+        }
+    }
+
+    private data class AlertPolicy(
+        val ratio: Double, val minimumBytes: Long, val dispersionMultiplier: Double,
+    )
+
+    private fun median(values: List<Long>): Double {
+        val sorted = values.sorted()
+        val middle = sorted.size / 2
+        return if (sorted.size % 2 == 1) sorted[middle].toDouble()
+        else (sorted[middle - 1] + sorted[middle]) / 2.0
+    }
+
+    private fun notifyIntelligenceAlert(title: String, body: String, key: String) {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(NotificationChannel(
+            INTELLIGENCE_CHANNEL, "Usage intelligence alerts", NotificationManager.IMPORTANCE_DEFAULT,
+        ).apply { description = "Unusual, new-app, and background data usage" })
+        val intent = PendingIntent.getActivity(
+            context, 0, Intent(context, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        manager.notify(key.hashCode(), NotificationCompat.Builder(context, INTELLIGENCE_CHANNEL)
+            .setSmallIcon(android.R.drawable.stat_notify_error)
+            .setContentTitle(title).setContentText(body).setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setContentIntent(intent).setAutoCancel(true).build())
+    }
+
+    private fun formatBytes(bytes: Long): String = when {
+        bytes >= 1_000_000_000 -> String.format("%.1f GB", bytes / 1_000_000_000.0)
+        bytes >= 1_000_000 -> String.format("%.1f MB", bytes / 1_000_000.0)
+        else -> String.format("%.0f KB", bytes / 1_000.0)
     }
 
     fun hotspotUsage(start: Long, end: Long, network: String?): Map<String, Any?> {
@@ -253,6 +365,8 @@ class UsageCollector(private val context: Context) {
 
     companion object {
         const val ALERT_CHANNEL = "datalens_plan_alerts"
+        const val INTELLIGENCE_CHANNEL = "datalens_intelligence_alerts"
+        private const val NEW_APP_FLOOR_BYTES = 1_000_000L
 
         fun hasUsageAccess(context: Context): Boolean {
             val appOps = context.getSystemService(AppOpsManager::class.java)
