@@ -12,7 +12,7 @@ Implemented:
 - One-minute foreground-service persistence and live notification speed
 - WorkManager reconciliation using `NetworkStatsManager`
 - Local SQLite schema for snapshots, deltas, app identities, plans, and alerts
-- Device totals, per-app ranking, seven-day history, and live speed UI
+- Device totals, per-app ranking, 24-hour and seven-day history, and live speed UI
 - Aggregate hotspot/tethering totals, sessions, history, and separate category UI
 - Billing-cycle plans with deduplicated 80% and 100% alerts
 - Monitoring restart after reboot, local delete controls, and capability-aware states

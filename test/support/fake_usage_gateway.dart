@@ -52,6 +52,18 @@ class FakeUsageGateway implements UsageGateway {
   }) async => [DailyUsageRecord(date: DateTime.now(), total: total)];
 
   @override
+  Future<List<HourlyUsageRecord>> hourly(
+    DateTime start,
+    DateTime end, {
+    String network = 'all',
+  }) async => [
+    HourlyUsageRecord(
+      hour: DateTime.now().subtract(const Duration(hours: 1)),
+      total: network == 'hotspot' ? hotspot.today : total,
+    ),
+  ];
+
+  @override
   Future<void> deleteAllData() async {
     deleted = true;
     total = const UsageTotal();

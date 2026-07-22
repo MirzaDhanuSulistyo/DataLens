@@ -295,6 +295,31 @@ class UsageDatabase(context: Context) :
     }
 
     @Synchronized
+    fun hourlyUsage(start: Long, end: Long, network: String? = null): List<Map<String, Any>> {
+        val hotspot = network == "hotspot"
+        val filter = if (network == null || network == "all" || hotspot) "" else " AND d.network_type = ?"
+        val args = mutableListOf<String>()
+        if (hotspot) args.add(TETHERING_PLATFORM_KEY)
+        args.add(start.toString()); args.add(end.toString())
+        if (filter.isNotEmpty()) args.add(network!!)
+        val source = if (hotspot)
+            "usage_delta d JOIN app_identity a ON a.id = d.app_identity_id"
+        else "usage_delta d"
+        val attribution = if (hotspot) "a.platform_key = ?" else "d.app_identity_id IS NULL"
+        return readableDatabase.rawQuery(
+            """SELECT strftime('%Y-%m-%dT%H:00:00', d.interval_end_utc / 1000, 'unixepoch', 'localtime') hour,
+                      SUM(d.rx_bytes), SUM(d.tx_bytes)
+               FROM $source WHERE $attribution
+               AND d.interval_end_utc > ? AND d.interval_start_utc < ?$filter
+               GROUP BY hour ORDER BY hour""", args.toTypedArray()
+        ).use { cursor ->
+            buildList { while (cursor.moveToNext()) add(mapOf(
+                "hour" to cursor.getString(0), "rxBytes" to cursor.getLong(1), "txBytes" to cursor.getLong(2)
+            )) }
+        }
+    }
+
+    @Synchronized
     fun recordHotspotState(active: Boolean?, observedAt: Long, quality: String) {
         val state = when (active) { true -> "active"; false -> "inactive"; null -> "unknown" }
         val openSession = readableDatabase.rawQuery(

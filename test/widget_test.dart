@@ -47,4 +47,29 @@ void main() {
     expect(find.text('Search apps'), findsOneWidget);
     expect(find.text('Browser'), findsOneWidget);
   });
+
+  testWidgets('history switches between hourly and daily usage', (
+    tester,
+  ) async {
+    await tester.pumpWidget(DataLensApp(gateway: FakeUsageGateway()));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('History').last);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Measured device totals for the last 24 hours'),
+      findsOneWidget,
+    );
+    expect(find.text('Hourly breakdown'), findsOneWidget);
+
+    await tester.tap(find.text('Daily'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Measured device totals for the last 7 days'),
+      findsOneWidget,
+    );
+    expect(find.text('Daily breakdown'), findsOneWidget);
+  });
 }

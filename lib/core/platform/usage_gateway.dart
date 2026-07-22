@@ -110,6 +110,18 @@ class DailyUsageRecord {
       );
 }
 
+class HourlyUsageRecord {
+  const HourlyUsageRecord({required this.hour, required this.total});
+  final DateTime hour;
+  final UsageTotal total;
+
+  factory HourlyUsageRecord.fromMap(Map<Object?, Object?> map) =>
+      HourlyUsageRecord(
+        hour: DateTime.parse(map['hour'] as String),
+        total: UsageTotal.fromMap(map),
+      );
+}
+
 class HotspotUsage {
   const HotspotUsage({
     this.state = 'unknown',
@@ -220,6 +232,11 @@ abstract interface class UsageGateway {
     String network = 'all',
   });
   Future<List<DailyUsageRecord>> daily(
+    DateTime start,
+    DateTime end, {
+    String network = 'all',
+  });
+  Future<List<HourlyUsageRecord>> hourly(
     DateTime start,
     DateTime end, {
     String network = 'all',
@@ -339,6 +356,23 @@ class MethodChannelUsageGateway implements UsageGateway {
     return (values ?? const [])
         .map(
           (value) => DailyUsageRecord.fromMap(value! as Map<Object?, Object?>),
+        )
+        .toList();
+  }, const []);
+
+  @override
+  Future<List<HourlyUsageRecord>> hourly(
+    DateTime start,
+    DateTime end, {
+    String network = 'all',
+  }) => _safe(() async {
+    final values = await _channel.invokeListMethod<Object?>(
+      'getHourlyUsage',
+      _range(start, end, network),
+    );
+    return (values ?? const [])
+        .map(
+          (value) => HourlyUsageRecord.fromMap(value! as Map<Object?, Object?>),
         )
         .toList();
   }, const []);

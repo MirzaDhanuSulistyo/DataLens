@@ -62,6 +62,11 @@ class MainActivity : FlutterActivity() {
                     val end = call.argument<Number>("end")!!.toLong()
                     result.success(database.dailyUsage(start, end, call.argument("network")))
                 }
+                "getHourlyUsage" -> {
+                    val start = call.argument<Number>("start")!!.toLong()
+                    val end = call.argument<Number>("end")!!.toLong()
+                    result.success(database.hourlyUsage(start, end, call.argument("network")))
+                }
                 "getHotspotUsage" -> {
                     val start = call.argument<Number>("start")!!.toLong()
                     val end = call.argument<Number>("end")!!.toLong()

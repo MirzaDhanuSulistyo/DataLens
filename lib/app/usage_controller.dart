@@ -13,6 +13,7 @@ class UsageController extends ChangeNotifier {
   UsageTotal cycleUsage = const UsageTotal();
   List<AppUsageRecord> apps = const [];
   List<DailyUsageRecord> dailyUsage = const [];
+  List<HourlyUsageRecord> hourlyUsage = const [];
   List<AlertRecord> alerts = const [];
   HotspotUsage hotspot = const HotspotUsage();
   DataPlan? plan;
@@ -44,6 +45,7 @@ class UsageController extends ChangeNotifier {
       plan = await gateway.getPlan();
       final now = DateTime.now();
       final startToday = DateTime(now.year, now.month, now.day);
+      final currentHour = DateTime(now.year, now.month, now.day, now.hour);
       final cycle = billingCycleFor(now, plan?.cycleDay ?? 1);
       final values = await Future.wait<Object>([
         gateway.summary(startToday, now, network: network),
@@ -54,6 +56,11 @@ class UsageController extends ChangeNotifier {
           now,
           network: network,
         ),
+        gateway.hourly(
+          currentHour.subtract(const Duration(hours: 23)),
+          now,
+          network: network,
+        ),
         gateway.alerts(),
         gateway.hotspotUsage(
           startToday,
@@ -61,12 +68,13 @@ class UsageController extends ChangeNotifier {
           network: network == 'hotspot' ? 'all' : network,
         ),
       ]);
-      hotspot = values[5] as HotspotUsage;
+      hotspot = values[6] as HotspotUsage;
       today = network == 'hotspot' ? hotspot.today : values[0] as UsageTotal;
       cycleUsage = values[1] as UsageTotal;
       apps = values[2] as List<AppUsageRecord>;
       dailyUsage = values[3] as List<DailyUsageRecord>;
-      alerts = values[4] as List<AlertRecord>;
+      hourlyUsage = values[4] as List<HourlyUsageRecord>;
+      alerts = values[5] as List<AlertRecord>;
     } catch (_) {
       error = 'Usage data could not be loaded. Try again.';
     } finally {

@@ -863,6 +863,100 @@ class _UsageChartCard extends StatelessWidget {
   }
 }
 
+class _HourlyUsageChartCard extends StatelessWidget {
+  const _HourlyUsageChartCard({required this.records});
+  final List<HourlyUsageRecord> records;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = AnduraThemeTokens.of(context);
+    final hours = _last24Hours(records);
+    final bytes = hours.map((record) => record.total.totalBytes).toList();
+    final maxBytes = bytes.fold<int>(
+      0,
+      (largest, value) => value > largest ? value : largest,
+    );
+    final total = bytes.fold<int>(0, (sum, value) => sum + value);
+    return AnduraCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                formatBytes(total),
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              SizedBox(width: tokens.space2),
+              Text(
+                'last 24 hours',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: tokens.muted),
+              ),
+              const Spacer(),
+              _Legend(color: tokens.accent, label: 'Usage'),
+            ],
+          ),
+          SizedBox(height: tokens.space6),
+          SizedBox(
+            height: 132,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                for (var index = 0; index < hours.length; index++)
+                  Expanded(
+                    child: _ChartBar(
+                      label: hours[index].hour.hour % 4 == 0
+                          ? hours[index].hour.hour.toString().padLeft(2, '0')
+                          : '',
+                      semanticsLabel: _hourLabel(hours[index].hour),
+                      value: maxBytes == 0 ? 0 : bytes[index] / maxBytes,
+                      bytes: bytes[index],
+                      selected: index == hours.length - 1,
+                      barWidth: 8,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+List<HourlyUsageRecord> _last24Hours(List<HourlyUsageRecord> records) {
+  final now = DateTime.now();
+  final currentHour = DateTime(now.year, now.month, now.day, now.hour);
+  return List.generate(24, (index) {
+    final hour = currentHour.subtract(Duration(hours: 23 - index));
+    final total = records
+        .where((record) => _isSameHour(record.hour, hour))
+        .fold<UsageTotal>(
+          const UsageTotal(),
+          (sum, record) => UsageTotal(
+            rxBytes: sum.rxBytes + record.total.rxBytes,
+            txBytes: sum.txBytes + record.total.txBytes,
+          ),
+        );
+    return HourlyUsageRecord(hour: hour, total: total);
+  });
+}
+
+bool _isSameHour(DateTime first, DateTime second) =>
+    first.year == second.year &&
+    first.month == second.month &&
+    first.day == second.day &&
+    first.hour == second.hour;
+
+String _hourLabel(DateTime value) {
+  final hour = value.hour % 12 == 0 ? 12 : value.hour % 12;
+  return '$hour:00 ${value.hour < 12 ? 'AM' : 'PM'}';
+}
+
 String _weekday(int day) =>
     const ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][day - 1];
 
@@ -894,18 +988,22 @@ class _ChartBar extends StatelessWidget {
     required this.value,
     required this.bytes,
     required this.selected,
+    this.semanticsLabel,
+    this.barWidth = 16,
   });
 
   final String label;
+  final String? semanticsLabel;
   final double value;
   final int bytes;
   final bool selected;
+  final double barWidth;
 
   @override
   Widget build(BuildContext context) {
     final tokens = AnduraThemeTokens.of(context);
     return Semantics(
-      label: '$label ${formatBytes(bytes)}',
+      label: '${semanticsLabel ?? label} ${formatBytes(bytes)}',
       child: Column(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
@@ -915,7 +1013,7 @@ class _ChartBar extends StatelessWidget {
               child: FractionallySizedBox(
                 heightFactor: value,
                 child: Container(
-                  width: 16,
+                  width: barWidth,
                   decoration: BoxDecoration(
                     color: selected
                         ? tokens.accent
@@ -1184,13 +1282,24 @@ class _AppsScreenState extends State<_AppsScreen> {
   }
 }
 
-class _HistoryScreen extends StatelessWidget {
+class _HistoryScreen extends StatefulWidget {
   const _HistoryScreen({required this.controller});
   final UsageController controller;
 
   @override
+  State<_HistoryScreen> createState() => _HistoryScreenState();
+}
+
+class _HistoryScreenState extends State<_HistoryScreen> {
+  var _hourly = true;
+
+  @override
   Widget build(BuildContext context) {
     final tokens = AnduraThemeTokens.of(context);
+    final hourlyRecords = _last24Hours(widget.controller.hourlyUsage);
+    final recordsAvailable = _hourly
+        ? widget.controller.hourlyUsage.isNotEmpty
+        : widget.controller.dailyUsage.isNotEmpty;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -1202,58 +1311,133 @@ class _HistoryScreen extends StatelessWidget {
         ),
         SizedBox(height: tokens.space2),
         Text(
-          'Measured device totals for the last 7 days',
+          _hourly
+              ? 'Measured device totals for the last 24 hours'
+              : 'Measured device totals for the last 7 days',
           style: Theme.of(
             context,
           ).textTheme.bodyMedium?.copyWith(color: tokens.muted),
         ),
         SizedBox(height: tokens.space4),
-        _UsageChartCard(records: controller.dailyUsage),
+        Row(
+          children: [
+            AnduraChip(
+              label: 'Hourly',
+              selected: _hourly,
+              onSelected: (_) => setState(() => _hourly = true),
+            ),
+            SizedBox(width: tokens.space2),
+            AnduraChip(
+              label: 'Daily',
+              selected: !_hourly,
+              onSelected: (_) => setState(() => _hourly = false),
+            ),
+          ],
+        ),
         SizedBox(height: tokens.space4),
-        const AnduraSectionHeader(title: 'Daily breakdown'),
+        if (_hourly)
+          _HourlyUsageChartCard(records: widget.controller.hourlyUsage)
+        else
+          _UsageChartCard(records: widget.controller.dailyUsage),
+        SizedBox(height: tokens.space4),
+        AnduraSectionHeader(
+          title: _hourly ? 'Hourly breakdown' : 'Daily breakdown',
+        ),
         SizedBox(height: tokens.space3),
-        if (controller.dailyUsage.isEmpty)
+        if (!recordsAvailable)
           const AnduraCard(
             child: AnduraEmptyState(
               message: 'History appears after the first monitoring samples',
               icon: Icons.bar_chart_outlined,
             ),
           )
+        else if (_hourly)
+          _HourlyBreakdown(records: hourlyRecords)
         else
-          AnduraCard(
-            child: Column(
-              children: [
-                for (
-                  var index = controller.dailyUsage.length - 1;
-                  index >= 0;
-                  index--
-                ) ...[
-                  AnduraListItem(
-                    leading: _AppIcon(
-                      icon: Icons.calendar_today_outlined,
-                      color: tokens.accent,
-                    ),
-                    title: Text(
-                      '${_monthName(controller.dailyUsage[index].date.month)} ${controller.dailyUsage[index].date.day}',
-                    ),
-                    subtitle: Text(
-                      '${formatBytes(controller.dailyUsage[index].total.rxBytes)} down · ${formatBytes(controller.dailyUsage[index].total.txBytes)} up',
-                    ),
-                    trailing: Text(
-                      formatBytes(
-                        controller.dailyUsage[index].total.totalBytes,
-                      ),
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                  if (index != 0) const AnduraDivider(),
-                ],
-              ],
-            ),
-          ),
+          _DailyBreakdown(records: widget.controller.dailyUsage),
       ],
     );
   }
+}
+
+class _HourlyBreakdown extends StatelessWidget {
+  const _HourlyBreakdown({required this.records});
+  final List<HourlyUsageRecord> records;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = AnduraThemeTokens.of(context);
+    final now = DateTime.now();
+    return AnduraCard(
+      child: Column(
+        children: [
+          for (var index = records.length - 1; index >= 0; index--) ...[
+            AnduraListItem(
+              leading: _AppIcon(
+                icon: Icons.schedule_outlined,
+                color: tokens.accent,
+              ),
+              title: Text(_hourBreakdownLabel(records[index].hour, now)),
+              subtitle: Text(
+                '${formatBytes(records[index].total.rxBytes)} down · ${formatBytes(records[index].total.txBytes)} up',
+              ),
+              trailing: Text(
+                formatBytes(records[index].total.totalBytes),
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+            if (index != 0) const AnduraDivider(),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _DailyBreakdown extends StatelessWidget {
+  const _DailyBreakdown({required this.records});
+  final List<DailyUsageRecord> records;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = AnduraThemeTokens.of(context);
+    return AnduraCard(
+      child: Column(
+        children: [
+          for (var index = records.length - 1; index >= 0; index--) ...[
+            AnduraListItem(
+              leading: _AppIcon(
+                icon: Icons.calendar_today_outlined,
+                color: tokens.accent,
+              ),
+              title: Text(
+                '${_monthName(records[index].date.month)} ${records[index].date.day}',
+              ),
+              subtitle: Text(
+                '${formatBytes(records[index].total.rxBytes)} down · ${formatBytes(records[index].total.txBytes)} up',
+              ),
+              trailing: Text(
+                formatBytes(records[index].total.totalBytes),
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+            if (index != 0) const AnduraDivider(),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+String _hourBreakdownLabel(DateTime value, DateTime now) {
+  final day = DateTime(value.year, value.month, value.day);
+  final today = DateTime(now.year, now.month, now.day);
+  final dayLabel = day == today
+      ? 'Today'
+      : day == today.subtract(const Duration(days: 1))
+      ? 'Yesterday'
+      : '${_monthName(value.month)} ${value.day}';
+  return '$dayLabel · ${_hourLabel(value)}';
 }
 
 class _AlertsScreen extends StatelessWidget {
