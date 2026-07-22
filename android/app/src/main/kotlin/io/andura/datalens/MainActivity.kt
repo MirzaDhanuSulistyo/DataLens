@@ -12,6 +12,7 @@ import io.andura.datalens.tracking.HotspotStateMonitor
 import io.andura.datalens.tracking.MonitoringService
 import io.andura.datalens.tracking.UsageCollector
 import io.andura.datalens.tracking.UsageDatabase
+import io.andura.datalens.widget.DataLensWidgetProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -23,10 +24,13 @@ class MainActivity : FlutterActivity() {
     private lateinit var hotspotStateMonitor: HotspotStateMonitor
     private val executor = Executors.newSingleThreadExecutor()
     private var notificationResult: MethodChannel.Result? = null
+    private lateinit var methodChannel: MethodChannel
+    private var pendingDestination: String? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         database = UsageDatabase(applicationContext)
+        executor.execute { database.pruneExpiredData() }
         collector = UsageCollector(applicationContext)
         hotspotStateMonitor = HotspotStateMonitor(applicationContext).also { it.start() }
         // An app update stops running services. Restore monitoring when the user
@@ -34,8 +38,14 @@ class MainActivity : FlutterActivity() {
         if (database.setting("monitoring_enabled") == "true") {
             MonitoringService.start(this)
         }
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
+        pendingDestination = destinationFromIntent(intent)
+        methodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+        methodChannel.setMethodCallHandler { call, result ->
             when (call.method) {
+                "getInitialDestination" -> {
+                    result.success(pendingDestination)
+                    pendingDestination = null
+                }
                 "getStatus" -> result.success(status())
                 "openUsageAccessSettings" -> {
                     startActivity(UsageCollector.usageSettingsIntent()); result.success(null)
@@ -93,7 +103,9 @@ class MainActivity : FlutterActivity() {
                         call.argument<Number>("capBytes")!!.toLong(),
                         call.argument<Number>("cycleDay")!!.toInt(),
                         call.argument<Boolean>("enabled") ?: true,
-                    ); result.success(true)
+                    )
+                    DataLensWidgetProvider.updateAll(this)
+                    result.success(true)
                 }
                 "getPlan" -> result.success(database.plan())
                 "getAlerts" -> result.success(database.alerts())
@@ -110,9 +122,43 @@ class MainActivity : FlutterActivity() {
                     database.putSetting("alert_background", (call.argument<Boolean>("backgroundAlerts") ?: true).toString())
                     result.success(true)
                 }
-                "deleteAllData" -> { database.deleteAll(); result.success(true) }
+                "getWidgetPreferences" -> result.success(mapOf(
+                    "content" to (database.setting("widget_content") ?: "today"),
+                    "refreshMinutes" to (database.setting("widget_refresh_minutes")?.toIntOrNull() ?: 30),
+                ))
+                "saveWidgetPreferences" -> {
+                    val content = call.argument<String>("content")?.takeIf { it == "today" || it == "cycle" } ?: "today"
+                    val refresh = call.argument<Number>("refreshMinutes")?.toInt()?.takeIf { it in setOf(15, 30, 60) } ?: 30
+                    database.putSetting("widget_content", content)
+                    database.putSetting("widget_refresh_minutes", refresh.toString())
+                    DataLensWidgetProvider.updateAll(this)
+                    result.success(true)
+                }
+                "getRetentionDays" -> result.success(database.retentionDays())
+                "saveRetentionDays" -> {
+                    val days = (call.arguments as? Number)?.toInt() ?: 365
+                    database.setRetentionDays(days)
+                    DataLensWidgetProvider.updateAll(this)
+                    result.success(true)
+                }
+                "deleteAllData" -> {
+                    database.deleteAll()
+                    DataLensWidgetProvider.updateAll(this)
+                    result.success(true)
+                }
                 else -> result.notImplemented()
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val destination = destinationFromIntent(intent) ?: return
+        if (::methodChannel.isInitialized) {
+            methodChannel.invokeMethod("destinationChanged", destination)
+        } else {
+            pendingDestination = destination
         }
     }
 
@@ -127,6 +173,12 @@ class MainActivity : FlutterActivity() {
         if (::hotspotStateMonitor.isInitialized) hotspotStateMonitor.stop()
         executor.shutdown()
         super.onDestroy()
+    }
+
+    private fun destinationFromIntent(value: Intent?): String? {
+        val explicit = value?.getStringExtra(EXTRA_DESTINATION)
+        val candidate = explicit ?: value?.data?.pathSegments?.firstOrNull()
+        return candidate?.takeIf { it in setOf("overview", "apps", "history", "alerts", "settings") }
     }
 
     private fun status(): Map<String, Any?> {
@@ -182,6 +234,7 @@ class MainActivity : FlutterActivity() {
     }
 
     companion object {
+        const val EXTRA_DESTINATION = "io.andura.datalens.DESTINATION"
         private const val CHANNEL = "io.andura.datalens/usage"
         private const val NOTIFICATION_REQUEST = 4103
     }

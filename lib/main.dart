@@ -73,7 +73,6 @@ class OverviewScreen extends StatefulWidget {
 
 class _OverviewScreenState extends State<OverviewScreen> {
   var _selectedNetwork = 'All';
-  var _selectedDestination = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -85,7 +84,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
           hasNotification: widget.controller.alerts.any(
             (alert) => alert.state == 'unread',
           ),
-          onPressed: () => setState(() => _selectedDestination = 3),
+          onPressed: () => widget.controller.selectDestination(3),
         ),
         Padding(
           padding: EdgeInsets.only(right: tokens.space4),
@@ -93,11 +92,10 @@ class _OverviewScreenState extends State<OverviewScreen> {
         ),
       ],
       bottomNavigationBar: NavigationBar(
-        selectedIndex: _selectedDestination,
+        selectedIndex: widget.controller.selectedDestination,
         height: 72,
         labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-        onDestinationSelected: (index) =>
-            setState(() => _selectedDestination = index),
+        onDestinationSelected: widget.controller.selectDestination,
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.grid_view_outlined),
@@ -126,7 +124,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
           ),
         ],
       ),
-      child: switch (_selectedDestination) {
+      child: switch (widget.controller.selectedDestination) {
         1 => _AppsScreen(controller: widget.controller),
         2 => _HistoryScreen(controller: widget.controller),
         3 => _AlertsScreen(controller: widget.controller),
@@ -1173,7 +1171,8 @@ class _AppsScreenState extends State<_AppsScreen> {
             intent: AnduraIntent.warning,
             action: AnduraButton(
               label: 'Open system settings',
-              onPressed: widget.controller.openUsageSettings,
+              onPressed: () =>
+                  _showUsageAccessDisclosure(context, widget.controller),
             ),
           ),
           SizedBox(height: tokens.space3),
@@ -1588,7 +1587,7 @@ class _SettingsScreen extends StatelessWidget {
           AnduraButton(
             label: 'Grant usage access',
             icon: Icons.admin_panel_settings_outlined,
-            onPressed: controller.openUsageSettings,
+            onPressed: () => _showUsageAccessDisclosure(context, controller),
           ),
         if (capability.usageAccess)
           AnduraButton(
@@ -1693,6 +1692,125 @@ class _SettingsScreen extends StatelessWidget {
           ),
         ),
         SizedBox(height: tokens.space6),
+        const AnduraSectionHeader(title: 'Home screen widget'),
+        SizedBox(height: tokens.space3),
+        AnduraCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Widget content',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              SizedBox(height: tokens.space3),
+              Wrap(
+                spacing: tokens.space2,
+                runSpacing: tokens.space2,
+                children: [
+                  AnduraChip(
+                    label: 'Today',
+                    selected: controller.widgetPreferences.content == 'today',
+                    onSelected: (_) => controller.updateWidgetPreferences(
+                      controller.widgetPreferences.copyWith(content: 'today'),
+                    ),
+                  ),
+                  AnduraChip(
+                    label: 'Billing cycle',
+                    selected: controller.widgetPreferences.content == 'cycle',
+                    onSelected: (_) => controller.updateWidgetPreferences(
+                      controller.widgetPreferences.copyWith(content: 'cycle'),
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: tokens.space4),
+              Text(
+                'Refresh while monitoring',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              SizedBox(height: tokens.space3),
+              Wrap(
+                spacing: tokens.space2,
+                runSpacing: tokens.space2,
+                children: [
+                  for (final minutes in const [15, 30, 60])
+                    AnduraChip(
+                      label: '$minutes min',
+                      selected:
+                          controller.widgetPreferences.refreshMinutes ==
+                          minutes,
+                      onSelected: (_) => controller.updateWidgetPreferences(
+                        controller.widgetPreferences.copyWith(
+                          refreshMinutes: minutes,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              SizedBox(height: tokens.space3),
+              Semantics(
+                label:
+                    'Widget preview. ${controller.widgetPreferences.content == 'cycle' ? 'Billing cycle' : 'Today'} usage ${formatBytes(controller.widgetPreferences.content == 'cycle' ? controller.cycleUsage.totalBytes : controller.today.totalBytes)}.',
+                child: ExcludeSemantics(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: tokens.surfaceWarm,
+                      borderRadius: BorderRadius.circular(tokens.radiusMd),
+                    ),
+                    child: Padding(
+                      padding: EdgeInsets.all(tokens.space4),
+                      child: Row(
+                        children: [
+                          Icon(Icons.data_usage_rounded, color: tokens.accent),
+                          SizedBox(width: tokens.space3),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  controller.widgetPreferences.content ==
+                                          'cycle'
+                                      ? 'THIS BILLING CYCLE'
+                                      : 'USED TODAY',
+                                  style: Theme.of(context).textTheme.labelSmall,
+                                ),
+                                Text(
+                                  formatBytes(
+                                    controller.widgetPreferences.content ==
+                                            'cycle'
+                                        ? controller.cycleUsage.totalBytes
+                                        : controller.today.totalBytes,
+                                  ),
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .headlineSmall
+                                      ?.copyWith(fontWeight: FontWeight.w700),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Text('DataLens'),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(height: tokens.space3),
+              Text(
+                'Add DataLens from the Android widget picker. Android may defer updates to protect battery; every value includes its last-updated time.',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: tokens.muted),
+              ),
+            ],
+          ),
+        ),
+        SizedBox(height: tokens.space6),
         const AnduraSectionHeader(title: 'Plan and privacy'),
         SizedBox(height: tokens.space3),
         AnduraSettingsTile(
@@ -1705,6 +1823,17 @@ class _SettingsScreen extends StatelessWidget {
                 : formatBytes(controller.plan!.capBytes, fractionDigits: 0),
           ),
           onTap: () => _showPlanDialog(context, controller),
+        ),
+        AnduraSettingsTile(
+          icon: Icons.history_toggle_off_rounded,
+          color: tokens.accent,
+          title: 'History retention',
+          trailing: Text(
+            controller.retentionDays < 0
+                ? 'Forever'
+                : '${controller.retentionDays} days',
+          ),
+          onTap: () => _showRetentionDialog(context, controller),
         ),
         AnduraSettingsTile(
           icon: Icons.delete_outline,
@@ -1720,7 +1849,7 @@ class _SettingsScreen extends StatelessWidget {
         ),
         SizedBox(height: tokens.space3),
         Text(
-          'Android intelligence · Phase 3',
+          'Widgets and hardening · Phase 4',
           textAlign: TextAlign.center,
           style: Theme.of(
             context,
@@ -1804,6 +1933,40 @@ class _SettingsScreen extends StatelessWidget {
     day.dispose();
   }
 
+  Future<void> _showRetentionDialog(
+    BuildContext context,
+    UsageController controller,
+  ) async {
+    final selected = await showDialog<int>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('History retention'),
+        children: [
+          RadioGroup<int>(
+            groupValue: controller.retentionDays,
+            onChanged: (value) => Navigator.pop(context, value),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final option in const [30, 90, 365, -1])
+                  RadioListTile<int>(
+                    title: Text(
+                      option < 0 ? 'Keep forever' : 'Keep $option days',
+                    ),
+                    subtitle: option == 30
+                        ? const Text('Uses the least local storage')
+                        : null,
+                    value: option,
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+    if (selected != null) await controller.updateRetentionDays(selected);
+  }
+
   Future<void> _confirmDelete(
     BuildContext context,
     UsageController controller,
@@ -1829,6 +1992,32 @@ class _SettingsScreen extends StatelessWidget {
     );
     if (confirmed == true) await controller.deleteAllData();
   }
+}
+
+Future<void> _showUsageAccessDisclosure(
+  BuildContext context,
+  UsageController controller,
+) async {
+  final accepted = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Allow usage access?'),
+      content: const Text(
+        'DataLens uses Android usage access to read byte totals reported by the operating system and attribute them to apps. This data stays on this device. DataLens does not inspect network payloads, URLs, messages, or browsing history. You can revoke access at any time in Android Settings.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Not now'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Continue'),
+        ),
+      ],
+    ),
+  );
+  if (accepted == true) await controller.openUsageSettings();
 }
 
 class _CapabilityRow extends StatelessWidget {

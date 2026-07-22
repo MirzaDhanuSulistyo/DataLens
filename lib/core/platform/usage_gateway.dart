@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 
 class CapabilityStatus {
@@ -242,6 +244,25 @@ class AlertRecord {
   );
 }
 
+class WidgetPreferences {
+  const WidgetPreferences({this.content = 'today', this.refreshMinutes = 30});
+
+  final String content;
+  final int refreshMinutes;
+
+  WidgetPreferences copyWith({String? content, int? refreshMinutes}) =>
+      WidgetPreferences(
+        content: content ?? this.content,
+        refreshMinutes: refreshMinutes ?? this.refreshMinutes,
+      );
+
+  factory WidgetPreferences.fromMap(Map<Object?, Object?> map) =>
+      WidgetPreferences(
+        content: map['content'] as String? ?? 'today',
+        refreshMinutes: (map['refreshMinutes'] as num?)?.toInt() ?? 30,
+      );
+}
+
 class AlertPreferences {
   const AlertPreferences({
     this.sensitivity = 'medium',
@@ -277,6 +298,8 @@ class AlertPreferences {
 }
 
 abstract interface class UsageGateway {
+  Stream<String> get destinationChanges;
+  Future<String?> initialDestination();
   Future<CapabilityStatus> status();
   Future<void> openUsageAccessSettings();
   Future<void> openOverlaySettings();
@@ -317,11 +340,31 @@ abstract interface class UsageGateway {
   Future<List<AlertRecord>> alerts();
   Future<AlertPreferences> getAlertPreferences();
   Future<void> saveAlertPreferences(AlertPreferences preferences);
+  Future<WidgetPreferences> getWidgetPreferences();
+  Future<void> saveWidgetPreferences(WidgetPreferences preferences);
+  Future<int> getRetentionDays();
+  Future<void> saveRetentionDays(int days);
   Future<void> deleteAllData();
 }
 
 class MethodChannelUsageGateway implements UsageGateway {
+  MethodChannelUsageGateway() {
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'destinationChanged' && call.arguments is String) {
+        _destinationController.add(call.arguments! as String);
+      }
+    });
+  }
+
   static const _channel = MethodChannel('io.andura.datalens/usage');
+  final _destinationController = StreamController<String>.broadcast();
+
+  @override
+  Stream<String> get destinationChanges => _destinationController.stream;
+
+  @override
+  Future<String?> initialDestination() =>
+      _safe(() => _channel.invokeMethod<String>('getInitialDestination'), null);
 
   Future<T> _safe<T>(Future<T> Function() action, T fallback) async {
     try {
@@ -512,6 +555,33 @@ class MethodChannelUsageGateway implements UsageGateway {
     }),
     null,
   );
+
+  @override
+  Future<WidgetPreferences> getWidgetPreferences() => _safe(() async {
+    final value = await _channel.invokeMapMethod<Object?, Object?>(
+      'getWidgetPreferences',
+    );
+    return WidgetPreferences.fromMap(value ?? const {});
+  }, const WidgetPreferences());
+
+  @override
+  Future<void> saveWidgetPreferences(WidgetPreferences preferences) => _safe(
+    () => _channel.invokeMethod<void>('saveWidgetPreferences', {
+      'content': preferences.content,
+      'refreshMinutes': preferences.refreshMinutes,
+    }),
+    null,
+  );
+
+  @override
+  Future<int> getRetentionDays() => _safe(
+    () async => await _channel.invokeMethod<int>('getRetentionDays') ?? 365,
+    365,
+  );
+
+  @override
+  Future<void> saveRetentionDays(int days) =>
+      _safe(() => _channel.invokeMethod<void>('saveRetentionDays', days), null);
 
   @override
   Future<void> deleteAllData() =>

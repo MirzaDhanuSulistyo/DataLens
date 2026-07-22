@@ -11,11 +11,13 @@ import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.TrafficStats
+import android.net.Uri
 import android.os.Process
 import android.os.SystemClock
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import io.andura.datalens.MainActivity
+import io.andura.datalens.widget.DataLensWidgetProvider
 import java.io.File
 import java.time.Instant
 import java.time.LocalDate
@@ -47,6 +49,8 @@ class UsageCollector(private val context: Context) {
         if (previous != null) database.insertDeviceDelta(previous, now)
         database.insertSnapshot(now)
         evaluatePlanAlerts()
+        database.pruneExpiredData()
+        DataLensWidgetProvider.maybeUpdate(context)
         return now
     }
 
@@ -212,10 +216,7 @@ class UsageCollector(private val context: Context) {
         manager.createNotificationChannel(NotificationChannel(
             INTELLIGENCE_CHANNEL, "Usage intelligence alerts", NotificationManager.IMPORTANCE_DEFAULT,
         ).apply { description = "Unusual, new-app, and background data usage" })
-        val intent = PendingIntent.getActivity(
-            context, 0, Intent(context, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
+        val intent = openDestination("alerts", 4201)
         manager.notify(key.hashCode(), NotificationCompat.Builder(context, INTELLIGENCE_CHANNEL)
             .setSmallIcon(android.R.drawable.stat_notify_error)
             .setContentTitle(title).setContentText(body).setStyle(NotificationCompat.BigTextStyle().bigText(body))
@@ -320,15 +321,25 @@ class UsageCollector(private val context: Context) {
         manager.createNotificationChannel(NotificationChannel(
             ALERT_CHANNEL, "Data plan alerts", NotificationManager.IMPORTANCE_DEFAULT
         ))
-        val intent = PendingIntent.getActivity(
-            context, 0, Intent(context, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
+        val intent = openDestination("alerts", 4202)
         manager.notify(type.hashCode(), NotificationCompat.Builder(context, ALERT_CHANNEL)
             .setSmallIcon(android.R.drawable.stat_notify_error)
             .setContentTitle(title).setContentText(body).setContentIntent(intent)
             .setAutoCancel(true).build())
     }
+
+    private fun openDestination(destination: String, requestCode: Int): PendingIntent =
+        PendingIntent.getActivity(
+            context,
+            requestCode,
+            Intent(context, MainActivity::class.java).apply {
+                action = Intent.ACTION_VIEW
+                data = Uri.parse("datalens://open/$destination")
+                putExtra(MainActivity.EXTRA_DESTINATION, destination)
+                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
 
     private fun cycleStart(day: Int): Long {
         val zone = ZoneId.systemDefault()

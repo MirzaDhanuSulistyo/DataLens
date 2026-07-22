@@ -18,6 +18,9 @@ class UsageController extends ChangeNotifier {
   HotspotUsage hotspot = const HotspotUsage();
   DataPlan? plan;
   AlertPreferences alertPreferences = const AlertPreferences();
+  WidgetPreferences widgetPreferences = const WidgetPreferences();
+  int retentionDays = 365;
+  int selectedDestination = 0;
   String network = 'all';
   bool loading = true;
   String? error;
@@ -26,15 +29,37 @@ class UsageController extends ChangeNotifier {
   String liveNetwork = 'unknown';
 
   Timer? _liveTimer;
+  StreamSubscription<String>? _destinationSubscription;
   LiveCounters? _previousCounters;
   bool _liveRequestPending = false;
   final List<double> _downWindow = [];
   final List<double> _upWindow = [];
 
   Future<void> initialize() async {
+    _destinationSubscription = gateway.destinationChanges.listen(navigateTo);
+    navigateTo(await gateway.initialDestination());
     capabilities = await gateway.status();
     await refreshData();
     if (capabilities.monitoring) _startLiveUpdates();
+  }
+
+  void navigateTo(String? destination) {
+    final index = switch (destination) {
+      'apps' => 1,
+      'history' => 2,
+      'alerts' => 3,
+      'settings' => 4,
+      _ => 0,
+    };
+    if (selectedDestination == index) return;
+    selectedDestination = index;
+    notifyListeners();
+  }
+
+  void selectDestination(int index) {
+    if (selectedDestination == index) return;
+    selectedDestination = index;
+    notifyListeners();
   }
 
   Future<void> refreshData() async {
@@ -45,6 +70,8 @@ class UsageController extends ChangeNotifier {
       capabilities = await gateway.status();
       plan = await gateway.getPlan();
       alertPreferences = await gateway.getAlertPreferences();
+      widgetPreferences = await gateway.getWidgetPreferences();
+      retentionDays = await gateway.getRetentionDays();
       final now = DateTime.now();
       final startToday = DateTime(now.year, now.month, now.day);
       final currentHour = DateTime(now.year, now.month, now.day, now.hour);
@@ -137,6 +164,19 @@ class UsageController extends ChangeNotifier {
     await gateway.saveAlertPreferences(value);
   }
 
+  Future<void> updateWidgetPreferences(WidgetPreferences value) async {
+    widgetPreferences = value;
+    notifyListeners();
+    await gateway.saveWidgetPreferences(value);
+  }
+
+  Future<void> updateRetentionDays(int value) async {
+    retentionDays = value;
+    notifyListeners();
+    await gateway.saveRetentionDays(value);
+    await refreshData();
+  }
+
   Future<void> openOverlaySettings() => gateway.openOverlaySettings();
 
   Future<void> setOverlayEnabled(bool enabled) async {
@@ -208,6 +248,7 @@ class UsageController extends ChangeNotifier {
   @override
   void dispose() {
     _liveTimer?.cancel();
+    _destinationSubscription?.cancel();
     super.dispose();
   }
 }

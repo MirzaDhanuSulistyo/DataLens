@@ -508,6 +508,44 @@ class UsageDatabase(context: Context) :
     }
 
     @Synchronized
+    fun retentionDays(): Int = setting("retention_days")?.toIntOrNull() ?: 365
+
+    @Synchronized
+    fun setRetentionDays(days: Int) {
+        require(days == -1 || days in setOf(30, 90, 365))
+        putSetting("retention_days", days.toString())
+        pruneExpiredData(force = true)
+    }
+
+    @Synchronized
+    fun pruneExpiredData(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        val lastPrune = setting("last_retention_prune_at")?.toLongOrNull() ?: 0L
+        if (!force && now - lastPrune < 24 * 60 * 60 * 1000L) return
+        val days = retentionDays()
+        if (days < 0) {
+            putSetting("last_retention_prune_at", now.toString())
+            return
+        }
+        val cutoff = now - days * 24 * 60 * 60 * 1000L
+        writableDatabase.beginTransaction()
+        try {
+            writableDatabase.delete("alert_event", "created_at < ?", arrayOf(cutoff.toString()))
+            writableDatabase.delete("usage_delta", "interval_end_utc < ?", arrayOf(cutoff.toString()))
+            writableDatabase.delete("usage_snapshot", "captured_at_utc < ?", arrayOf(cutoff.toString()))
+            writableDatabase.delete(
+                "hotspot_session",
+                "ended_at_utc IS NOT NULL AND ended_at_utc < ?",
+                arrayOf(cutoff.toString()),
+            )
+            writableDatabase.setTransactionSuccessful()
+        } finally {
+            writableDatabase.endTransaction()
+        }
+        putSetting("last_retention_prune_at", now.toString())
+    }
+
+    @Synchronized
     fun deleteAll() {
         writableDatabase.beginTransaction()
         try {

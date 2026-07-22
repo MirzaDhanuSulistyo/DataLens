@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:datalens/core/platform/usage_gateway.dart';
 
 class FakeUsageGateway implements UsageGateway {
@@ -34,6 +36,16 @@ class FakeUsageGateway implements UsageGateway {
   ];
   bool deleted = false;
   AlertPreferences alertPreferences = const AlertPreferences();
+  WidgetPreferences widgetPreferences = const WidgetPreferences();
+  int retentionDays = 365;
+  String? initialDestinationValue;
+  final destinationController = StreamController<String>.broadcast();
+
+  @override
+  Stream<String> get destinationChanges => destinationController.stream;
+
+  @override
+  Future<String?> initialDestination() async => initialDestinationValue;
 
   @override
   Future<List<AlertRecord>> alerts() async => const [];
@@ -76,6 +88,12 @@ class FakeUsageGateway implements UsageGateway {
   Future<DataPlan?> getPlan() async => plan;
 
   @override
+  Future<WidgetPreferences> getWidgetPreferences() async => widgetPreferences;
+
+  @override
+  Future<int> getRetentionDays() async => retentionDays;
+
+  @override
   Future<HotspotUsage> hotspotUsage(
     DateTime start,
     DateTime end, {
@@ -109,6 +127,13 @@ class FakeUsageGateway implements UsageGateway {
 
   @override
   Future<void> savePlan(DataPlan value) async => plan = value;
+
+  @override
+  Future<void> saveWidgetPreferences(WidgetPreferences preferences) async =>
+      widgetPreferences = preferences;
+
+  @override
+  Future<void> saveRetentionDays(int days) async => retentionDays = days;
 
   @override
   Future<bool> setOverlayEnabled(bool enabled) async => enabled;

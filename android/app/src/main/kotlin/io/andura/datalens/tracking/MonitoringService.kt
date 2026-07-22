@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -100,7 +101,12 @@ class MonitoringService : Service() {
         .setContentTitle("DataLens monitoring")
         .setContentText("↓ ${formatRate(downBits)}  ↑ ${formatRate(upBits)}")
         .setContentIntent(PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java),
+            this, 0, Intent(this, MainActivity::class.java).apply {
+                action = Intent.ACTION_VIEW
+                data = Uri.parse("datalens://open/overview")
+                putExtra(MainActivity.EXTRA_DESTINATION, "overview")
+                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         ))
         .addAction(0, "Stop", PendingIntent.getService(
