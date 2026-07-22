@@ -282,6 +282,19 @@ class AlertRecord {
     networkType: map['networkType'] as String?,
     foregroundState: map['foregroundState'] as String?,
   );
+
+  AlertRecord copyWith({String? state}) => AlertRecord(
+    id: id,
+    type: type,
+    actualBytes: actualBytes,
+    state: state ?? this.state,
+    createdAt: createdAt,
+    appLabel: appLabel,
+    baselineBytes: baselineBytes,
+    ratio: ratio,
+    networkType: networkType,
+    foregroundState: foregroundState,
+  );
 }
 
 class WidgetPreferences {
@@ -378,6 +391,7 @@ abstract interface class UsageGateway {
   Future<DataPlan?> getPlan();
   Future<void> savePlan(DataPlan plan);
   Future<List<AlertRecord>> alerts();
+  Future<void> markAllAlertsRead();
   Future<AlertPreferences> getAlertPreferences();
   Future<void> saveAlertPreferences(AlertPreferences preferences);
   Future<WidgetPreferences> getWidgetPreferences();
@@ -582,6 +596,10 @@ class MethodChannelUsageGateway implements UsageGateway {
         .map((value) => AlertRecord.fromMap(value! as Map<Object?, Object?>))
         .toList();
   }, const []);
+
+  @override
+  Future<void> markAllAlertsRead() =>
+      _safe(() => _channel.invokeMethod<void>('markAllAlertsRead'), null);
 
   @override
   Future<AlertPreferences> getAlertPreferences() => _safe(() async {

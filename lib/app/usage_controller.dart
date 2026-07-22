@@ -162,6 +162,12 @@ class UsageController extends ChangeNotifier {
     await refreshData();
   }
 
+  Future<void> markAllAlertsRead() async {
+    await gateway.markAllAlertsRead();
+    alerts = [for (final alert in alerts) alert.copyWith(state: 'read')];
+    notifyListeners();
+  }
+
   Future<void> updateAlertPreferences(AlertPreferences value) async {
     alertPreferences = value;
     notifyListeners();

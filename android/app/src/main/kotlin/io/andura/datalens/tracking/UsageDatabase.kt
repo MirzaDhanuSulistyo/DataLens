@@ -442,6 +442,16 @@ class UsageDatabase(context: Context) :
     )) } }
 
     @Synchronized
+    fun markAllAlertsRead() {
+        writableDatabase.update(
+            "alert_event",
+            ContentValues().apply { put("state", "read") },
+            "state = ?",
+            arrayOf("unread"),
+        )
+    }
+
+    @Synchronized
     fun intelligenceCandidates(start: Long, end: Long): List<IntelligenceCandidate> =
         readableDatabase.rawQuery(
             """SELECT d.app_identity_id, a.label_snapshot, d.network_type,

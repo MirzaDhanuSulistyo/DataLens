@@ -114,6 +114,10 @@ class MainActivity : FlutterActivity() {
                 }
                 "getPlan" -> result.success(database.plan())
                 "getAlerts" -> result.success(database.alerts())
+                "markAllAlertsRead" -> {
+                    database.markAllAlertsRead()
+                    result.success(true)
+                }
                 "setAppExcluded" -> {
                     database.setAppExcluded(
                         call.argument<Number>("appId")!!.toLong(),

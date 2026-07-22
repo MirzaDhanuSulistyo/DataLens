@@ -1470,14 +1470,27 @@ class _AlertsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = AnduraThemeTokens.of(context);
+    final hasUnread = controller.alerts.any((alert) => alert.state == 'unread');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          'Alerts',
-          style: Theme.of(
-            context,
-          ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Alerts',
+                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            if (hasUnread)
+              TextButton.icon(
+                onPressed: controller.markAllAlertsRead,
+                icon: const Icon(Icons.done_all, size: 18),
+                label: const Text('Mark all as read'),
+              ),
+          ],
         ),
         SizedBox(height: tokens.space2),
         Text(
@@ -1647,12 +1660,29 @@ class _SettingsScreen extends StatelessWidget {
                     ),
                   ),
                 SizedBox(height: tokens.space2),
-                AnduraButton(
-                  label: controller.deviceGuidance.optimizationExempt
-                      ? 'Review battery settings'
-                      : 'Open battery optimization settings',
-                  icon: Icons.battery_saver_outlined,
-                  onPressed: controller.openBatterySettings,
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: controller.openBatterySettings,
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(vertical: tokens.space2),
+                      child: Wrap(
+                        alignment: WrapAlignment.center,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: tokens.space2,
+                        runSpacing: tokens.space1,
+                        children: [
+                          const Icon(Icons.battery_saver_outlined),
+                          Text(
+                            controller.deviceGuidance.optimizationExempt
+                                ? 'Review battery settings'
+                                : 'Open battery optimization settings',
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
               ],
             ),

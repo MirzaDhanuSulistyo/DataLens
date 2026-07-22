@@ -35,6 +35,7 @@ class FakeUsageGateway implements UsageGateway {
     ),
   ];
   bool deleted = false;
+  List<AlertRecord> alertRecords = const [];
   AlertPreferences alertPreferences = const AlertPreferences();
   WidgetPreferences widgetPreferences = const WidgetPreferences();
   int retentionDays = 365;
@@ -59,7 +60,14 @@ class FakeUsageGateway implements UsageGateway {
   Future<String?> initialDestination() async => initialDestinationValue;
 
   @override
-  Future<List<AlertRecord>> alerts() async => const [];
+  Future<List<AlertRecord>> alerts() async => alertRecords;
+
+  @override
+  Future<void> markAllAlertsRead() async {
+    alertRecords = [
+      for (final alert in alertRecords) alert.copyWith(state: 'read'),
+    ];
+  }
 
   @override
   Future<List<AppUsageRecord>> apps(

@@ -1,4 +1,6 @@
+import 'package:datalens/core/platform/usage_gateway.dart';
 import 'package:datalens/main.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/fake_usage_gateway.dart';
@@ -92,6 +94,40 @@ void main() {
     );
   });
 
+  testWidgets('all unread alerts can be marked as read', (tester) async {
+    final gateway = FakeUsageGateway()
+      ..initialDestinationValue = 'alerts'
+      ..alertRecords = [
+        AlertRecord(
+          id: 7,
+          type: 'anomaly_daily',
+          actualBytes: 200000000,
+          state: 'unread',
+          createdAt: DateTime.now(),
+          appLabel: 'Browser',
+        ),
+        AlertRecord(
+          id: 8,
+          type: 'plan_80',
+          actualBytes: 24000000000,
+          state: 'unread',
+          createdAt: DateTime.now(),
+        ),
+      ];
+    await tester.pumpWidget(DataLensApp(gateway: gateway));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Mark all as read'), findsOneWidget);
+    await tester.tap(find.text('Mark all as read'));
+    await tester.pumpAndSettle();
+
+    expect(
+      gateway.alertRecords.every((alert) => alert.state == 'read'),
+      isTrue,
+    );
+    expect(find.text('Mark all as read'), findsNothing);
+  });
+
   testWidgets('settings exposes widget, portability, and OEM controls', (
     tester,
   ) async {
@@ -111,6 +147,35 @@ void main() {
       find.text('Android P2 · Portability and compatibility'),
       findsOneWidget,
     );
+  });
+
+  testWidgets('battery settings action fits on a narrow settings screen', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(420, 800);
+    tester.platformDispatcher.textScaleFactorTestValue = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+
+    final gateway = FakeUsageGateway()
+      ..initialDestinationValue = 'settings'
+      ..capabilityStatus = CapabilityStatus(
+        platform: 'android',
+        usageAccess: false,
+        notifications: true,
+        monitoring: true,
+        latestSampleAt: DateTime.now(),
+        overlayPermission: true,
+      );
+    await tester.pumpWidget(DataLensApp(gateway: gateway));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Open battery optimization settings'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Open battery optimization settings'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('history switches between hourly and daily usage', (
