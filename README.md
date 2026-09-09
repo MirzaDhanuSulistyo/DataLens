@@ -65,3 +65,7 @@ flutter build apk --debug
 ```
 
 The debug APK is written to `build/app/outputs/flutter-apk/app-debug.apk`.
+
+## Part of Andura
+
+DataLens is part of [Andura](https://github.com/MirzaDhanuSulistyo/Andura) — I release products from real problems. Product page: [andura.io/work/datalens](https://andura.io/work/datalens/).
